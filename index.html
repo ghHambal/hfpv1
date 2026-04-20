@@ -1,22 +1,221 @@
+<!DOCTYPE html>
 <html lang="th">
 <head>
-    <base target="_top">
     <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <!-- ชื่อหน้า (ตัดอิโมจิออก) -->
-    <title>☪️HafizPro</title>
-
-    <!-- Favicon จากลิงก์ที่ให้มา -->
-    <link rel="icon" type="image/png" href="">
+    <title>Hifz Tracker Pro - Master Deployment</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Sarabun', sans-serif; background-color: #f3f4f6; }
+        .step-card { background: white; border-radius: 12px; padding: 24px; margin-bottom: 24px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); border-left: 4px solid #2E7D32; }
+        pre { background: #1e293b; color: #e2e8f0; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 13px; font-family: monospace; }
+    </style>
 </head>
-<body>
-    <iframe
-        style="width: 100%; height: 100vh;"
-        scrolling="yes"
-        src="https://script.google.com/macros/s/AKfycbz6sIInzecM9a8ob83MpfIF_Pg-F7y_UeRXsMV7mZllsAhffsyIRm5JI8BL6taWGqLuBw/exec"
-        frameborder="0">
-    </iframe>
+<body class="text-gray-800 pb-20">
+
+    <div class="bg-green-800 text-white py-10 px-4 mb-8 shadow-lg">
+        <div class="max-w-4xl mx-auto">
+            <h1 class="text-3xl md:text-4xl font-bold mb-2">🚀 Hifz Tracker Pro</h1>
+            <p class="text-green-100 text-lg">Master Deployment Guide (คู่มือทำสำเนาระบบสำหรับโรงเรียนใหม่)</p>
+        </div>
+    </div>
+
+    <div class="max-w-4xl mx-auto px-4">
+        
+        <div class="step-card">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-full bg-green-100 text-green-700 flex items-center justify-center font-bold text-xl">1</div>
+                <h2 class="text-xl font-bold text-gray-800">สร้าง Project ใหม่ใน Supabase</h2>
+            </div>
+            <ul class="list-disc list-inside space-y-2 text-gray-600 ml-2">
+                <li>ไปที่ <a href="https://supabase.com" target="_blank" class="text-blue-600 hover:underline font-medium">Supabase.com</a> และคลิก <strong>New Project</strong></li>
+                <li>ตั้งชื่อ Project (เช่น <code class="bg-gray-100 px-1 rounded">hifz-school-name</code>) และตั้งรหัสผ่าน Database Password ให้จำได้</li>
+                <li>เลือก Region เป็น <strong>Singapore (ap-southeast-1)</strong> (เพื่อความรวดเร็วในไทย)</li>
+                <li>รอประมาณ 2-3 นาทีจนกว่า Project จะสร้างเสร็จ</li>
+            </ul>
+        </div>
+
+        <div class="step-card">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-full bg-green-100 text-green-700 flex items-center justify-center font-bold text-xl">2</div>
+                    <h2 class="text-xl font-bold text-gray-800">สร้างตารางฐานข้อมูล (SQL Script)</h2>
+                </div>
+                <button onclick="copySql()" class="bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2">
+                    <span id="copyText">📋 คัดลอก SQL</span>
+                </button>
+            </div>
+            <p class="text-gray-600 mb-4 ml-2">ไปที่เมนู <strong>SQL Editor</strong> (ไอคอน >_ แถบซ้าย) ➔ กด <strong>New Query</strong> ➔ วางโค้ดด้านล่าง แล้วกด <strong>RUN</strong></p>
+            
+<pre id="sqlCode">-- 1. สร้างตารางการตั้งค่า (Settings)
+CREATE TABLE IF NOT EXISTS "Settings" (
+  "key" TEXT PRIMARY KEY,
+  "value" TEXT NOT NULL
+);
+
+INSERT INTO "Settings" ("key", "value") VALUES 
+('schoolName', 'ระบุชื่อโรงเรียน'),
+('appName', 'Hifz Tracker Pro'),
+('currentTerm', '1/2569')
+ON CONFLICT ("key") DO NOTHING;
+
+-- 2. สร้างตารางโปรแกรม (Programs)
+CREATE TABLE IF NOT EXISTS "Programs" (
+  "programId" TEXT PRIMARY KEY,
+  "programName" TEXT NOT NULL,
+  "targetJuzPerTerm" NUMERIC DEFAULT 0,
+  "hasAssessment" BOOLEAN DEFAULT true,
+  "isActive" BOOLEAN DEFAULT true
+);
+
+-- 3. สร้างตารางครู/บุคลากร (Teachers)
+CREATE TABLE IF NOT EXISTS "Teachers" (
+  "teacherId" TEXT PRIMARY KEY,
+  "firstName" TEXT NOT NULL,
+  "lastName" TEXT NOT NULL,
+  "classRoom" TEXT,
+  "phone" TEXT,
+  "email" TEXT,
+  "role" TEXT NOT NULL,
+  "isActive" BOOLEAN DEFAULT true,
+  "photoUrl" TEXT
+);
+
+-- สร้างบัญชีแอดมินเริ่มต้น
+INSERT INTO "Teachers" ("teacherId", "firstName", "lastName", "role", "isActive") 
+VALUES ('ADMIN001', 'ระบบ', 'ผู้ดูแลสูงสุด', 'admin', true)
+ON CONFLICT ("teacherId") DO NOTHING;
+
+-- 4. สร้างตารางผู้ปกครอง (Parents)
+CREATE TABLE IF NOT EXISTS "Parents" (
+  "parentId" TEXT PRIMARY KEY,
+  "firstName" TEXT NOT NULL,
+  "lastName" TEXT NOT NULL,
+  "phone" TEXT,
+  "email" TEXT,
+  "studentIds" TEXT,
+  "isActive" BOOLEAN DEFAULT true,
+  "photoUrl" TEXT
+);
+
+-- 5. สร้างตารางนักเรียน (Students)
+CREATE TABLE IF NOT EXISTS "Students" (
+  "studentId" TEXT PRIMARY KEY,
+  "firstName" TEXT NOT NULL,
+  "lastName" TEXT NOT NULL,
+  "classRoom" TEXT,
+  "teacherId" TEXT REFERENCES "Teachers"("teacherId") ON DELETE SET NULL,
+  "programId" TEXT REFERENCES "Programs"("programId") ON DELETE SET NULL,
+  "parentId" TEXT REFERENCES "Parents"("parentId") ON DELETE SET NULL,
+  "pin4" TEXT,
+  "isActive" BOOLEAN DEFAULT true,
+  "photoUrl" TEXT
+);
+
+-- 6. สร้างตารางบันทึกการท่อง (Logs)
+CREATE TABLE IF NOT EXISTS "Logs" (
+  "logId" TEXT PRIMARY KEY,
+  "studentId" TEXT NOT NULL REFERENCES "Students"("studentId") ON DELETE CASCADE,
+  "teacherId" TEXT REFERENCES "Teachers"("teacherId") ON DELETE SET NULL,
+  "date" DATE NOT NULL,
+  "logType" TEXT NOT NULL,
+  "juzNumber" INTEGER DEFAULT 0,
+  "surahNumber" INTEGER DEFAULT 0,
+  "surahName" TEXT,
+  "ayah" TEXT,
+  "score" NUMERIC DEFAULT 0,
+  "pages" NUMERIC DEFAULT 0,
+  "status" TEXT NOT NULL,
+  "note" TEXT,
+  "created_at" TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 7. สร้างตารางข้อมูลซูเราะห์ (Mapping & Surahs)
+CREATE TABLE IF NOT EXISTS "Mapping" (
+  "id" SERIAL PRIMARY KEY,
+  "surahNumber" INTEGER NOT NULL,
+  "surahNameThai" TEXT,
+  "surahNameArabic" TEXT,
+  "ayahRange" TEXT,
+  "ayahStart" INTEGER,
+  "ayahEnd" INTEGER,
+  "pageRange" TEXT,
+  "pageStart" INTEGER,
+  "pageEnd" INTEGER,
+  "juzNumber" INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS "Surahs" (
+  "number" INTEGER PRIMARY KEY,
+  "name" TEXT,
+  "englishName" TEXT,
+  "numberOfAyahs" INTEGER,
+  "juz" INTEGER
+);</pre>
+            <div class="mt-4 p-3 bg-blue-50 text-blue-800 text-sm rounded-lg border border-blue-200">
+                <strong>💡 ข้อควรระวัง:</strong> อย่าลืมนำไฟล์ CSV ข้อมูล `Mapping` และ `Surahs` (รายชื่อซูเราะห์ทั้ง 114 บท) มา Import เข้าตารางหลังจากรันสคริปต์นี้เสร็จด้วยครับ
+            </div>
+        </div>
+
+        <div class="step-card">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-full bg-green-100 text-green-700 flex items-center justify-center font-bold text-xl">3</div>
+                <h2 class="text-xl font-bold text-gray-800">ตั้งค่าพื้นที่เก็บรูปภาพ (Storage Bucket)</h2>
+            </div>
+            <p class="text-sm text-gray-600 mb-3 ml-2">หากโรงเรียนต้องการเก็บรูปโปรไฟล์ไว้ใน Supabase ให้ทำตามขั้นตอนนี้ (ถ้าใช้ Google Drive ข้ามข้อนี้ได้เลย)</p>
+            <ol class="list-decimal list-inside space-y-2 text-gray-600 ml-2">
+                <li>ไปที่เมนู <strong>Storage</strong> (ไอคอนรูปกล่อง แถบซ้าย)</li>
+                <li>คลิก <strong>New Bucket</strong></li>
+                <li>ตั้งชื่อ Bucket ว่า <code class="bg-gray-100 text-blue-600 px-1 rounded">avatars</code></li>
+                <li>✅ ติ๊กเลือก <strong>Public bucket</strong> แล้วกด Save</li>
+                <li>ไปที่แท็บ <strong>Policies</strong> ในหน้า Storage ➔ ค้นหาชื่อ bucket "avatars"</li>
+                <li>คลิก <strong>New Policy</strong> ➔ เลือก <strong>For full customization</strong></li>
+                <li>ตั้งชื่อ Policy ว่า <code class="bg-gray-100 px-1 rounded">Allow Public Access</code></li>
+                <li>ตรงช่อง <strong>Allowed Operations</strong> ให้ติ๊ก <code class="text-green-600">SELECT</code>, <code class="text-green-600">INSERT</code>, <code class="text-green-600">UPDATE</code>, <code class="text-green-600">DELETE</code></li>
+                <li>กด <strong>Save policy</strong> เพื่ออนุญาตให้ระบบใช้อัปโหลดรูปได้</li>
+            </ol>
+        </div>
+
+        <div class="step-card">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-full bg-green-100 text-green-700 flex items-center justify-center font-bold text-xl">4</div>
+                <h2 class="text-xl font-bold text-gray-800">ดึง API Key ไปใส่ในเว็บแอป (App Script)</h2>
+            </div>
+            <ul class="list-disc list-inside space-y-2 text-gray-600 ml-2 mb-4">
+                <li>ไปที่เมนู <strong>Project Settings</strong> (ไอคอนฟันเฟืองล่างซ้าย) ➔ เลือก <strong>API</strong></li>
+                <li>คัดลอก <strong>Project URL</strong> และ <strong>Project API keys (anon / public)</strong></li>
+                <li>เปิดไฟล์ <code>index.html</code> (ใน Google Apps Script ของโรงเรียนใหม่) แล้วนำไปแทนที่ด้านบนสุดของโค้ด:</li>
+            </ul>
+<pre>
+// ============================================
+// 🚀 ตั้งค่าการเชื่อมต่อ Supabase (สำหรับโรงเรียนใหม่)
+// ============================================
+const SUPABASE_URL = 'วาง_URL_ที่นี่';
+const SUPABASE_KEY = 'วาง_API_KEY_ที่นี่';
+const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+</pre>
+            <div class="mt-4 p-4 bg-green-50 border-2 border-green-200 rounded-lg text-center">
+                <p class="text-lg font-bold text-green-800">🎉 เสร็จสิ้น! ระบบพร้อมใช้งานทันที</p>
+                <p class="text-sm text-green-700 mt-1">สามารถเข้าสู่ระบบด้วยรหัส <strong class="bg-white px-2 py-1 rounded border">ADMIN001</strong> ได้เลย</p>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        function copySql() {
+            const sqlText = document.getElementById('sqlCode').innerText;
+            navigator.clipboard.writeText(sqlText).then(() => {
+                const btn = document.getElementById('copyText');
+                btn.innerHTML = '✅ คัดลอกแล้ว!';
+                btn.parentElement.classList.add('bg-green-600');
+                setTimeout(() => {
+                    btn.innerHTML = '📋 คัดลอก SQL';
+                    btn.parentElement.classList.remove('bg-green-600');
+                }, 2000);
+            });
+        }
+    </script>
 </body>
 </html>
