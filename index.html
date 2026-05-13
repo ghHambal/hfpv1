@@ -1,24 +1,3 @@
-<!-- <html lang="th">
-<head>
-    <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <title>☪️TFSPRO_PIRAYA</title>
-
-    <link rel="icon" type="image/png" href="">
-</head>
-<body>
-    <iframe
-        style="width: 100%; height: 100vh;"
-        scrolling="yes"
-        src="https://script.google.com/macros/s/AKfycbyP-0WSubihqaGtmrxsdjYGYF8uU7FTrCiN7Jvvaa3miHZOu5uhBqz_tyqmauTzPiwQ/exec
-"
-        frameborder="0">
-    </iframe>
-</body>
-</html> -->
-
 
 
 <!DOCTYPE html>
@@ -3240,7 +3219,38 @@ async function viewStudentDetail(studentId) {
           <h3 class="font-bold text-gray-800">📝 ประวัติการท่อง (ล่าสุด 20 รายการ)</h3>
           <button onclick="printStudentReport('${s.studentId}')" class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm font-medium shadow-sm">🖨️ พิมพ์รายงาน</button>
         </div>
-        <div class="divide-y">${r.recentLogs.length === 0 ? '<p class="p-8 text-center text-gray-500">ยังไม่มีบันทึก</p>' : r.recentLogs.slice(0, 20).map(log => { const info = getLogTypeInfo(log.logType); return `<div class="p-4 flex items-center justify-between hover:bg-gray-50"><div class="flex-1"><div class="flex items-center gap-2 mb-1"><span class="px-2 py-0.5 rounded text-xs ${info.color}">${info.label}</span>${log.status === 'PASS' ? '<span class="text-green-600 text-xs font-medium">✓ ผ่าน</span>' : ''}</div><p class="text-sm text-gray-700">${log.surahName && log.surahName !== '-' ? `ยุซ ${log.juzNumber} - ${log.surahName}` : ''}${log.ayah && log.ayah !== '-' ? ` • อายะฮ์ ${log.ayah}` : ''}</p>${log.note ? `<p class="text-xs text-gray-500 italic mt-1">"${log.note}"</p>` : ''}</div><div class="text-right">${log.score > 0 ? `<p class="font-bold">⭐ ${log.score}/5</p>` : ''}<p class="text-xs text-gray-500">${formatDate(log.date)}</p></div></div>`; }).join('')}</div>
+        <div class="divide-y">${r.recentLogs.length === 0 ? '<p class="p-8 text-center text-gray-500">ยังไม่มีบันทึก</p>' : r.recentLogs.slice(0, 20).map(log => {
+          const info = getLogTypeInfo(log.logType);
+          const logKey = getLogKey(log);
+          const canManageThisLog = canManageLog(log) && logKey;
+          const safeStudentId = escapeJsSingleQuote(s.studentId);
+          const safeLogKey = escapeJsSingleQuote(logKey);
+          const safeDeleteName = escapeJsSingleQuote(`${s.firstName} ${s.lastName}`);
+          return `
+            <div class="p-4 flex items-center justify-between gap-3 hover:bg-gray-50">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1 flex-wrap">
+                  <span class="px-2 py-0.5 rounded text-xs ${info.color}">${info.label}</span>
+                  ${log.status === 'PASS' ? '<span class="text-green-600 text-xs font-medium">✓ ผ่าน</span>' : ''}
+                  ${log.status === 'NEED_REVIEW' ? '<span class="text-yellow-600 text-xs font-medium">⚠ ทบทวน</span>' : ''}
+                  ${log.status === 'ABSENT' ? '<span class="text-red-600 text-xs font-medium">✗ ขาด</span>' : ''}
+                </div>
+                <p class="text-sm text-gray-700">${log.surahName && log.surahName !== '-' ? `ยุซ ${log.juzNumber} - ${log.surahName}` : ''}${log.ayah && log.ayah !== '-' ? ` • อายะฮ์ ${log.ayah}` : ''}</p>
+                ${log.note ? `<p class="text-xs text-gray-500 italic mt-1">"${log.note}"</p>` : ''}
+              </div>
+              <div class="text-right text-xs text-gray-500 whitespace-nowrap">
+                ${log.score > 0 ? `<p class="font-bold text-gray-800">⭐ ${log.score}/5</p>` : ''}
+                <p>${formatDate(log.date)}</p>
+                ${canManageThisLog ? `
+                  <div class="flex justify-end gap-2 mt-2">
+                    <button type="button" onclick="showLogModal('${safeStudentId}', '${safeLogKey}')" class="px-2 py-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 font-medium">แก้ไข</button>
+                    <button type="button" onclick="confirmDelete('บันทึกของ ${safeDeleteName}', () => deleteLogAction('${safeLogKey}'))" class="px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-red-700 font-medium">ลบ</button>
+                  </div>
+                ` : ''}
+              </div>
+            </div>
+          `;
+        }).join('')}</div>
       </div>
 
       <div class="bg-white rounded-xl shadow p-6 mb-6">
@@ -3370,7 +3380,7 @@ let currentStudentPassedLogs = [];
 // ============================================
 // 📝 เปิดหน้าต่างบันทึก
 // ============================================
-async function showLogModal(studentId) {
+async function showLogModal(studentId, editLogKey = null) {
   const student = allStudents.find(s => s.studentId === studentId);
   if (!student) return;
   
@@ -3398,7 +3408,20 @@ async function showLogModal(studentId) {
     }
     
     hideLoading();
-    renderLogModal(student);
+    let editingLog = null;
+    if (editLogKey) {
+      editingLog = findLogByKey(editLogKey);
+      if (!editingLog) {
+        editingLog = await fetchLogByKey(editLogKey);
+      }
+
+      if (!editingLog || !canManageLog(editingLog)) {
+        showToast('ไม่พบรายการ หรือคุณไม่มีสิทธิ์แก้ไขรายการนี้', 'error');
+        return;
+      }
+    }
+
+    renderLogModal(student, editingLog);
   } catch (err) {
     hideLoading();
     showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
@@ -3715,14 +3738,16 @@ function onSurahSelected(juz) {
 // ============================================
 // 🖥️ วาดหน้าต่าง Modal บันทึก
 // ============================================
-function renderLogModal(student) {
+function renderLogModal(student, editingLog = null) {
+  const isEdit = !!editingLog;
   const today = new Date().toISOString().split('T')[0];
+  const formDate = isEdit ? String(editingLog.date || today).split('T')[0] : today;
   document.getElementById('modalContainer').innerHTML = `
     <div class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4 fade-in" onclick="if(event.target === this) closeModal()">
       <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div class="p-5 border-b flex items-center justify-between sticky top-0 bg-white z-10">
           <div>
-            <h3 class="text-xl font-bold text-gray-800">📝 บันทึกการท่อง</h3>
+            <h3 class="text-xl font-bold text-gray-800">${isEdit ? '✏️ แก้ไขบันทึกการท่อง' : '📝 บันทึกการท่อง'}</h3>
             <p class="text-sm text-gray-600">${student.firstName} ${student.lastName} • ${student.classRoom}</p>
           </div>
           <button type="button" onclick="closeModal()" class="text-gray-400 hover:text-gray-700">
@@ -3732,10 +3757,12 @@ function renderLogModal(student) {
         
         <form id="logForm" class="p-5 space-y-4" novalidate>
           <input type="hidden" id="logStudentId" value="${student.studentId}">
+          <input type="hidden" id="logEditKey" value="${isEdit ? getLogKey(editingLog) : ''}">
+          <input type="hidden" id="logOriginalTeacherId" value="${isEdit ? (editingLog.teacherId || currentUser.userId) : currentUser.userId}">
           
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-2">วันที่ *</label>
-            <input type="date" id="logDate" value="${today}" required
+            <input type="date" id="logDate" value="${formDate}" required
               class="w-full px-4 py-2 border-2 rounded-lg focus:outline-none focus:border-green-600">
           </div>
           
@@ -3815,9 +3842,9 @@ function renderLogModal(student) {
                   <div class="flex items-center gap-2">
                     <span class="text-2xl">📄</span>
                     <div>
-                      <p class="text-xs text-gray-600">จำนวนหน้าที่ท่องได้</p>
+                      <p class="text-xs text-gray-600">จำนวนแผ่นที่ท่องได้</p>
                       <p class="text-2xl font-bold text-green-700">
-                        <span id="pagesDisplay">0</span> <span class="text-sm font-normal">หน้า</span>
+                        <span id="pagesDisplay">0</span> <span class="text-sm font-normal">แผ่น</span>
                        </p>
                       <p class="text-xs text-gray-500 mt-0.5">✨ คำนวณอัตโนมัติจากจำนวนอายะฮ์</p>
                     </div>
@@ -3826,10 +3853,10 @@ function renderLogModal(student) {
                 </div>
               </div>
               <div id="pagesEditMode" class="hidden">
-                 <label class="block text-sm font-medium text-gray-700 mb-2">📄 จำนวนหน้า (ปรับด้วยตนเอง)</label>
+                 <label class="block text-sm font-medium text-gray-700 mb-2">📄 จำนวนแผ่น (ปรับด้วยตนเอง)</label>
                 <div class="flex gap-2 items-center mb-2">
                   <input type="number" id="logPages" step="0.5" min="0" max="20" placeholder="เช่น 2.5" class="flex-1 px-4 py-2 border-2 rounded-lg focus:outline-none focus:border-blue-600">
-                  <span class="text-gray-600 text-sm">หน้า/หน้า/แผ่น</span>
+                  <span class="text-gray-600 text-sm">แผ่น</span>
                   <button type="button" onclick="resetToAutoPages()" class="text-xs bg-white border-2 border-gray-300 hover:border-green-500 px-3 py-2 rounded-lg text-gray-700 font-medium whitespace-nowrap">↩️ กลับใช้ Auto</button>
                 </div>
                 <div class="flex gap-1 flex-wrap">
@@ -3894,7 +3921,7 @@ function renderLogModal(student) {
 
           <div class="flex gap-3 pt-3">
             <button type="button" onclick="closeModal()" class="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 py-2 rounded-lg font-medium">ยกเลิก</button>
-            <button type="submit" class="flex-1 primary-bg primary-hover text-white py-2 rounded-lg font-medium">บันทึก</button>
+            <button type="submit" class="flex-1 primary-bg primary-hover text-white py-2 rounded-lg font-medium">${isEdit ? 'บันทึกการแก้ไข' : 'บันทึก'}</button>
           </div>
         </form>
       </div>
@@ -3902,10 +3929,69 @@ function renderLogModal(student) {
   `;
   
   setTimeout(() => {
-    updateJuzList();
+    if (isEdit) {
+      populateLogFormForEdit(editingLog);
+    } else {
+      updateJuzList();
+    }
   }, 100);
 
   document.getElementById('logForm').addEventListener('submit', submitLog);
+}
+
+function populateLogFormForEdit(log) {
+  if (!log) return;
+
+  const typeInput = document.querySelector(`input[name="logType"][value="${log.logType}"]`);
+  if (typeInput) {
+    typeInput.checked = true;
+    togglePagesField(log.logType);
+  } else {
+    updateJuzList();
+  }
+
+  const juzSelect = document.getElementById('logJuz');
+  if (juzSelect) {
+    juzSelect.value = log.juzNumber ? String(log.juzNumber) : '';
+  }
+
+  if (log.logType === 'قراءتي') {
+    togglePagesField(log.logType);
+    if (juzSelect) juzSelect.value = log.juzNumber ? String(log.juzNumber) : '';
+  } else if (juzSelect && juzSelect.value) {
+    updateSurahList();
+    const surahSelect = document.getElementById('logSurah');
+    if (surahSelect) {
+      surahSelect.value = log.surahNumber ? String(log.surahNumber) : '';
+      if (surahSelect.value) onSurahSelected(parseInt(juzSelect.value));
+    }
+  }
+
+  const ayahParts = String(log.ayah || '').split('-');
+  const startAyah = ayahParts[0] || '';
+  const endAyah = ayahParts[1] || ayahParts[0] || '';
+  const startSelect = document.getElementById('logAyahStart');
+  const endSelect = document.getElementById('logAyahEnd');
+  if (startSelect) startSelect.value = startAyah;
+  if (endSelect) endSelect.value = endAyah;
+
+  const scoreInput = document.querySelector(`input[name="logScore"][value="${Number(log.score || 0)}"]`);
+  if (scoreInput) scoreInput.checked = true;
+
+  const statusInput = document.querySelector(`input[name="logStatus"][value="${log.status || 'RECORDED'}"]`);
+  if (statusInput) statusInput.checked = true;
+
+  const noteInput = document.getElementById('logNote');
+  if (noteInput) noteInput.value = log.note || '';
+
+  const pagesValue = parseFloat(log.pages) || 0;
+  const pagesSection = document.getElementById('pagesSection');
+  if (pagesValue > 0 && pagesSection && !pagesSection.classList.contains('hidden')) {
+    enableManualPages();
+    updatePagesDisplay(pagesValue);
+  } else {
+    calculateAyahPages();
+  }
 }
 
 // 🆕 Cache สำหรับ Mapping Data
@@ -4023,9 +4109,97 @@ function hideSurahInfoBox() {
   if (box) box.classList.add('hidden');
 }
 
+function getLogKey(log) {
+  if (!log) return '';
+  return String(log.id ?? log.logId ?? '');
+}
+
+function escapeJsSingleQuote(value) {
+  return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function findLogByKey(key) {
+  const target = String(key || '');
+  if (!target) return null;
+  return allLogs.find(log => getLogKey(log) === target || String(log.logId || '') === target || String(log.id || '') === target) || null;
+}
+
+function getLogQueryByKey(key) {
+  const target = String(key || '');
+  const field = /^\d+$/.test(target) ? 'id' : 'logId';
+  return { field, target };
+}
+
+async function fetchLogByKey(key) {
+  const where = getLogQueryByKey(key);
+  const { data, error } = await supabaseClient
+    .from('Logs')
+    .select('*')
+    .eq(where.field, where.target)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+function canManageLog(log) {
+  if (!log || !currentUser) return false;
+  if (currentUser.role === 'admin' || currentUser.role === 'director') return true;
+  return currentUser.role === 'teacher' && String(log.teacherId || '') === String(currentUser.userId || '');
+}
+
+function clearLogRelatedCaches(teacherId) {
+  cacheClear('students_all');
+  cacheClear('logs_all');
+  cacheClear(`students_teacher_${teacherId || currentUser.userId}`);
+  cacheClear(`logs_teacher_${teacherId || currentUser.userId}`);
+  cacheClear(`dashboard_${currentUser.userId}_${currentUser.role}`);
+  if (currentUser && currentUser.userId !== teacherId) {
+    cacheClear(`students_teacher_${currentUser.userId}`);
+    cacheClear(`logs_teacher_${currentUser.userId}`);
+  }
+}
+
+async function deleteLogAction(logKey) {
+  let log = findLogByKey(logKey);
+  if (!log) {
+    try {
+      log = await fetchLogByKey(logKey);
+    } catch (error) {
+      showToast('ไม่พบรายการบันทึกนี้', 'error');
+      return;
+    }
+  }
+  if (!log || !canManageLog(log)) {
+    showToast('ไม่พบรายการ หรือคุณไม่มีสิทธิ์ลบรายการนี้', 'error');
+    return;
+  }
+
+  showLoading('กำลังลบบันทึก...');
+  try {
+    const where = getLogQueryByKey(logKey);
+    const { error } = await supabaseClient.from('Logs').delete().eq(where.field, where.target);
+    if (error) throw error;
+
+    hideLoading();
+    clearLogRelatedCaches(log.teacherId);
+    allLogs = allLogs.filter(item => getLogKey(item) !== String(logKey));
+    showToast('ลบบันทึกสำเร็จ', 'success');
+
+    if (currentTab === 'dashboard') renderDashboard();
+    else if (currentTab === 'students') renderStudents();
+    else if (currentTab === 'logs') renderLogsTab();
+  } catch (error) {
+    hideLoading();
+    showToast('ลบไม่สำเร็จ: ' + error.message, 'error');
+    console.error("Delete Log Error:", error);
+  }
+}
 
 async function submitLog(e) {
   e.preventDefault(); // หยุดการรีเฟรชหน้า
+  const editKey = document.getElementById('logEditKey') ? document.getElementById('logEditKey').value : '';
+  const isEdit = !!editKey;
+  const existingLog = isEdit ? findLogByKey(editKey) : null;
   
   // 1. เช็คข้อมูลเบื้องต้น (Manual Validation แทน Browser)
   const logDate = document.getElementById('logDate').value;
@@ -4059,7 +4233,8 @@ async function submitLog(e) {
     const isDuplicate = currentStudentPassedLogs.find(log => 
       log.logType === 'سبق' && 
       parseInt(log.surahNumber) === surahNumber && 
-      log.ayah === currentAyah
+      log.ayah === currentAyah &&
+      (!isEdit || getLogKey(log) !== editKey)
     );
 
     if (isDuplicate) {
@@ -4076,9 +4251,9 @@ async function submitLog(e) {
   const pagesValue = pagesInput ? parseFloat(pagesInput.value) || 0 : 0;
 
   const data = {
-    logId: 'LOG-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+    logId: isEdit && existingLog && existingLog.logId ? existingLog.logId : 'LOG-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
     studentId: document.getElementById('logStudentId').value,
-    teacherId: currentUser.userId,
+    teacherId: document.getElementById('logOriginalTeacherId').value || currentUser.userId,
     date: logDate,
     logType: logType.value,
     juzNumber: juzNumber,
@@ -4091,19 +4266,18 @@ async function submitLog(e) {
     note: document.getElementById('logNote').value
   };
   
-  showLoading('กำลังบันทึกคะแนน...');
+  showLoading(isEdit ? 'กำลังบันทึกการแก้ไข...' : 'กำลังบันทึกคะแนน...');
   try {
-    const { error } = await supabaseClient.from('Logs').insert([data]);
+    const where = getLogQueryByKey(editKey || data.logId);
+    const { error } = isEdit
+      ? await supabaseClient.from('Logs').update(data).eq(where.field, where.target)
+      : await supabaseClient.from('Logs').insert([data]);
     if (error) throw error;
     
     hideLoading();
-    cacheClear('students_all');
-    cacheClear(`students_teacher_${currentUser.userId}`);
-    cacheClear(`dashboard_${currentUser.userId}_${currentUser.role}`);
-    cacheClear(`logs_teacher_${currentUser.userId}`);
-    cacheClear('logs_all');
+    clearLogRelatedCaches(data.teacherId);
     
-    showToast('บันทึกสำเร็จ!', 'success');
+    showToast(isEdit ? 'แก้ไขบันทึกสำเร็จ!' : 'บันทึกสำเร็จ!', 'success');
     closeModal();
     
     if (currentTab === 'dashboard') renderDashboard();
@@ -6338,9 +6512,15 @@ function renderLogsUI() {
             const info = getLogTypeInfo(log.logType);
             const student = allStudents.find(s => s.studentId === log.studentId);
             const teacher = allTeachers.find(t => t.teacherId === log.teacherId);
+            const logKey = getLogKey(log);
+            const canManageThisLog = canManageLog(log) && student && logKey;
+            const studentNameForDelete = student ? `${student.firstName} ${student.lastName}` : log.studentId;
+            const safeStudentId = escapeJsSingleQuote(student ? student.studentId : log.studentId);
+            const safeLogKey = escapeJsSingleQuote(logKey);
+            const safeDeleteName = escapeJsSingleQuote(studentNameForDelete);
             return `
               <div class="p-4 hover:bg-gray-50">
-                <div class="flex items-start justify-between">
+                <div class="flex items-start justify-between gap-3">
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 mb-1 flex-wrap">
                       <span class="font-bold text-gray-800">${student ? student.firstName + ' ' + student.lastName : log.studentId}</span>
@@ -6358,8 +6538,18 @@ function renderLogsUI() {
                     ${teacher ? `<p class="text-xs text-gray-500 mt-0.5">👩‍🏫 ${teacher.firstName} ${teacher.lastName}</p>` : ''}
                     ${log.note ? `<p class="text-xs text-gray-500 italic mt-1">"${log.note}"</p>` : ''}
                   </div>
-                  <div class="text-right text-xs text-gray-500 ml-3 whitespace-nowrap">
-                    ${formatDateTime(log.date)}
+                  <div class="text-right text-xs text-gray-500 whitespace-nowrap">
+                    <p>${formatDateTime(log.date)}</p>
+                    ${canManageThisLog ? `
+                      <div class="flex justify-end gap-2 mt-2">
+                        <button type="button" onclick="showLogModal('${safeStudentId}', '${safeLogKey}')" class="px-2 py-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 font-medium">
+                          แก้ไข
+                        </button>
+                        <button type="button" onclick="confirmDelete('บันทึกของ ${safeDeleteName}', () => deleteLogAction('${safeLogKey}'))" class="px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-red-700 font-medium">
+                          ลบ
+                        </button>
+                      </div>
+                    ` : ''}
                   </div>
                 </div>
               </div>
