@@ -258,6 +258,8 @@ let dashStudentSearchQuery = '';
 let dashStudentGradeFilter = '';
 let dashStudentClassFilter = '';
 let dashStudentProgFilter = '';
+let dashTeacherStatusFilter = localStorage.getItem('hifzDashTeacherStatusFilter') || '';
+let dashTeacherRankFilter = localStorage.getItem('hifzDashTeacherRankFilter') || 'today';
 
 const LOG_TYPES = [
   { value: 'سبق', label: 'ท่องจำ (سبق)', color: 'bg-blue-100 text-blue-700', hasScore: true },
@@ -1806,7 +1808,7 @@ async function fetchDashboardSupabase(cacheKey, silent, loader) {
       todayLogs: todayLogs.length,
       needReview: logs.filter(l => l.status === 'NEED_REVIEW').length,
       totalTeachers: teachers.filter(t => t.role === 'teacher').length,
-      classProgress: [], classRanking: [], studentRanking: [], logTypeStats: {}, teacherStatus: [], recentLogs: []
+      classProgress: [], classRanking: [], studentRanking: [], teacherRanking: [], logTypeStats: {}, teacherStatus: [], recentLogs: []
     };
 
     dashData.recentLogs = logs.slice(0, 10).map(l => {
@@ -1829,10 +1831,42 @@ async function fetchDashboardSupabase(cacheKey, silent, loader) {
         const pct = classStds.length ? Math.round((loggedStdIds.size / classStds.length) * 100) : 0;
         return {
           teacherName: `${t.firstName} ${t.lastName}`,
+          teacherId: t.teacherId,
           classRoom: t.classRoom,
           status: pct === 100 ? 'complete' : (pct > 0 ? 'partial' : 'none'),
           loggedToday: loggedStdIds.size, totalStudents: classStds.length, percentage: pct
         };
+      });
+
+      dashData.teacherRanking = teacherList.map(t => {
+        const classStds = students.filter(s => s.classRoom === t.classRoom);
+        const classStudentIds = new Set(classStds.map(s => s.studentId));
+        const teacherLogs = logs.filter(l => classStudentIds.has(l.studentId));
+        const todayTeacherLogs = todayLogs.filter(l => classStudentIds.has(l.studentId));
+        const weekTeacherLogs = teacherLogs.filter(l => new Date(l.date || '') >= sevenDaysAgo);
+        const passLogs = teacherLogs.filter(l => l.status === 'PASS');
+        const scoreLogs = teacherLogs.filter(l => Number(l.score) > 0);
+        const todayLoggedIds = new Set(todayTeacherLogs.map(l => l.studentId));
+        const todayPct = classStds.length ? Math.round((todayLoggedIds.size / classStds.length) * 100) : 0;
+        const avgScore = scoreLogs.length ? Number((scoreLogs.reduce((sum, l) => sum + Number(l.score), 0) / scoreLogs.length).toFixed(1)) : 0;
+
+        return {
+          teacherId: t.teacherId,
+          teacherName: `${t.firstName} ${t.lastName}`,
+          classRoom: t.classRoom,
+          totalStudents: classStds.length,
+          loggedToday: todayLoggedIds.size,
+          todayPercentage: todayPct,
+          todayLogCount: todayTeacherLogs.length,
+          weekLogCount: weekTeacherLogs.length,
+          totalLogCount: teacherLogs.length,
+          passCount: passLogs.length,
+          avgScore
+        };
+      }).sort((a, b) => {
+        if (b.todayPercentage !== a.todayPercentage) return b.todayPercentage - a.todayPercentage;
+        if (b.weekLogCount !== a.weekLogCount) return b.weekLogCount - a.weekLogCount;
+        return b.passCount - a.passCount;
       });
     }
 
@@ -2004,21 +2038,43 @@ function renderDashboardContent(response) {
             <p class="text-sm text-gray-600">ครู</p>
           </div>
         </div>
+
+        <div class="sticky top-0 z-20 mb-6 bg-gray-50/95 backdrop-blur border border-gray-200 rounded-xl shadow-sm p-2 overflow-x-auto">
+          <div class="flex gap-2 min-w-max text-sm">
+            <a href="#dashboard-section-progress" class="px-3 py-2 rounded-lg bg-white hover:bg-green-50 text-gray-700 font-medium border border-gray-200">ความคืบหน้า</a>
+            <a href="#dashboard-section-students" class="px-3 py-2 rounded-lg bg-white hover:bg-yellow-50 text-gray-700 font-medium border border-gray-200">อันดับนักเรียน</a>
+            ${(role === 'director' || role === 'admin') ? `
+              <a href="#dashboard-section-teachers" class="px-3 py-2 rounded-lg bg-white hover:bg-blue-50 text-gray-700 font-medium border border-gray-200">สถานะครูวันนี้</a>
+              <a href="#dashboard-section-teacher-ranking" class="px-3 py-2 rounded-lg bg-white hover:bg-purple-50 text-gray-700 font-medium border border-gray-200">อันดับครู</a>
+              <a href="#dashboard-section-class-ranking" class="px-3 py-2 rounded-lg bg-white hover:bg-indigo-50 text-gray-700 font-medium border border-gray-200">อันดับชั้น</a>
+            ` : ''}
+            <a href="#dashboard-section-stats" class="px-3 py-2 rounded-lg bg-white hover:bg-pink-50 text-gray-700 font-medium border border-gray-200">สถิติ 7 วัน</a>
+            <a href="#dashboard-section-recent" class="px-3 py-2 rounded-lg bg-white hover:bg-gray-100 text-gray-700 font-medium border border-gray-200">ล่าสุด</a>
+          </div>
+        </div>
       `;
 
       if ((role === 'director' || role === 'admin' || role === 'teacher') && data.classProgress && data.classProgress.length > 0) {
-        html += `<div id="dashClassProgressSection"></div>`;
+        html += `<section id="dashboard-section-progress" class="scroll-mt-24"><div id="dashClassProgressSection"></div></section>`;
       }
       
       // 💡 เพิ่มคอนเทนเนอร์สำหรับตารางอันดับนักเรียน
       if ((role === 'director' || role === 'admin' || role === 'teacher') && data.studentRanking && data.studentRanking.length > 0) {
-        html += `<div id="dashStudentRankingSection"></div>`;
+        html += `<section id="dashboard-section-students" class="scroll-mt-24"><div id="dashStudentRankingSection"></div></section>`;
+      }
+
+      if ((role === 'director' || role === 'admin') && data.teacherStatus && data.teacherStatus.length > 0) {
+        html += `<section id="dashboard-section-teachers" class="scroll-mt-24"><div id="dashTeacherStatusSection"></div></section>`;
+      }
+
+      if ((role === 'director' || role === 'admin') && data.teacherRanking && data.teacherRanking.length > 0) {
+        html += `<section id="dashboard-section-teacher-ranking" class="scroll-mt-24"><div id="dashTeacherRankingSection"></div></section>`;
       }
       
       if ((role === 'director' || role === 'admin') && data.classRanking && data.classRanking.length > 0) {
         const topClasses = data.classRanking.slice(0, 10);
         html += `
-          <div class="bg-white rounded-xl shadow mb-6">
+          <section id="dashboard-section-class-ranking" class="scroll-mt-24 bg-white rounded-xl shadow mb-6">
             <div class="p-5 border-b">
               <h3 class="font-bold text-gray-800"> อันดับความก้าวหน้าของชั้น</h3>
               <p class="text-xs text-gray-500 mt-1">เรียงตามเปอร์เซ็นต์ความสำเร็จ</p>
@@ -2073,22 +2129,22 @@ function renderDashboardContent(response) {
                 </tbody>
               </table>
             </div>
-          </div>
+          </section>
         `;
       }
       
       if (data.logTypeStats) {
         const types = [
-          { key: 'سَبَق', label: 'ท่องจำ', color: 'bg-blue-500', icon: '📖' },
-          { key: 'سَبْقِي', label: 'ทบทวนใหม่', color: 'bg-purple-500', icon: '🔄' },
-          { key: 'مَنْزِل', label: 'ทบทวนเก่า', color: 'bg-indigo-500', icon: '📚' },
-          { key: 'نَاظِرَة', label: 'นาซีเราะห์', color: 'bg-pink-500', icon: '👀' },
-          { key: 'قِرَاءَاتِي', label: 'กีรออาตี', color: 'bg-teal-500', icon: '🗣️' }
+          { key: 'سبق', display: 'سَبَق', label: 'ท่องจำ', color: 'bg-blue-500', icon: '📖' },
+          { key: 'سبقي', display: 'سَبْقِي', label: 'ทบทวนใหม่', color: 'bg-purple-500', icon: '🔄' },
+          { key: 'منزل', display: 'مَنْزِل', label: 'ทบทวนเก่า', color: 'bg-indigo-500', icon: '📚' },
+          { key: 'نزيرة', display: 'نَاظِرَة', label: 'นาซีเราะห์', color: 'bg-pink-500', icon: '👀' },
+          { key: 'قراءتي', display: 'قِرَاءَاتِي', label: 'กีรออาตี', color: 'bg-teal-500', icon: '🗣️' }
         ];
         const maxCount = Math.max(...types.map(t => data.logTypeStats[t.key] || 0), 1);
         
         html += `
-          <div class="bg-white rounded-xl shadow mb-6">
+          <section id="dashboard-section-stats" class="scroll-mt-24 bg-white rounded-xl shadow mb-6">
             <div class="p-5 border-b">
               <h3 class="font-bold text-gray-800">📊 สถิติการบันทึก 7 วันล่าสุด</h3>
               <p class="text-xs text-gray-500 mt-1">แยกตามประเภทการท่อง</p>
@@ -2101,7 +2157,7 @@ function renderDashboardContent(response) {
                   <div class="flex items-center gap-3">
                     <div class="w-32 flex-shrink-0">
                       <p class="text-sm font-medium text-gray-700">${t.icon} ${t.label}</p>
-                      <p class="text-xs text-gray-500 arabic" dir="rtl" style="font-family: 'Scheherazade New', serif;">${t.key}</p>
+                      <p class="text-xs text-gray-500 arabic" dir="rtl" style="font-family: 'Scheherazade New', serif;">${t.display}</p>
                     </div>
                     <div class="flex-1 bg-gray-100 rounded-full h-6 relative overflow-hidden">
                       <div class="${t.color} h-full rounded-full transition-all flex items-center justify-end pr-2" style="width: ${percent}%; min-width: 40px;">
@@ -2112,40 +2168,12 @@ function renderDashboardContent(response) {
                 `;
               }).join('')}
             </div>
-          </div>
-        `;
-      }
-      
-      if ((role === 'director' || role === 'admin') && data.teacherStatus && data.teacherStatus.length > 0) {
-        html += `
-          <div class="bg-white rounded-xl shadow mb-6">
-            <div class="p-5 border-b">
-              <h3 class="font-bold text-gray-800">🧑‍🏫 สถานะการบันทึกของครู (วันนี้)</h3>
-            </div>
-            <div class="p-5 space-y-3">
-              ${data.teacherStatus.map(t => {
-                const statusColors = { complete: 'bg-green-100 text-green-700', partial: 'bg-yellow-100 text-yellow-700', none: 'bg-red-100 text-red-700' };
-                const statusLabels = { complete: '✅ ครบแล้ว', partial: '⏳ กำลังบันทึก', none: '❌ ยังไม่บันทึก' };
-                return `
-                  <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <div>
-                      <p class="font-medium text-gray-800">${t.teacherName}</p>
-                      <p class="text-sm text-gray-600">${t.classRoom}</p>
-                    </div>
-                    <div class="text-right">
-                      <span class="px-3 py-1 rounded-full text-xs font-medium ${statusColors[t.status]}">${statusLabels[t.status]}</span>
-                      <p class="text-sm text-gray-600 mt-1">${t.loggedToday}/${t.totalStudents} (${t.percentage}%)</p>
-                    </div>
-                  </div>
-                `;
-              }).join('')}
-            </div>
-          </div>
+          </section>
         `;
       }
       
       html += `
-        <div class="bg-white rounded-xl shadow">
+        <section id="dashboard-section-recent" class="scroll-mt-24 bg-white rounded-xl shadow">
           <div class="p-5 border-b">
             <h3 class="font-bold text-gray-800">⏱️ บันทึกล่าสุด</h3>
           </div>
@@ -2174,7 +2202,7 @@ function renderDashboardContent(response) {
               }).join('')
             }
           </div>
-        </div>
+        </section>
       `;
       
       content.innerHTML = html;
@@ -2182,6 +2210,178 @@ function renderDashboardContent(response) {
       // 💡 สร้าง UI ของ 2 ตารางที่เราออกแบบไว้
       if (document.getElementById('dashClassProgressSection')) renderDashClassProgressUI();
       if (document.getElementById('dashStudentRankingSection')) renderDashStudentRankingUI();
+      if (document.getElementById('dashTeacherStatusSection')) renderDashTeacherStatusUI();
+      if (document.getElementById('dashTeacherRankingSection')) renderDashTeacherRankingUI();
+}
+
+// ============================================
+// ฟังก์ชันวาดสถานะการบันทึกของครูวันนี้ พร้อมตัวกรอง
+// ============================================
+function renderDashTeacherStatusUI() {
+  const container = document.getElementById('dashTeacherStatusSection');
+  if (!container || !currentDashData || !currentDashData.teacherStatus) return;
+
+  let filtered = currentDashData.teacherStatus;
+  if (dashTeacherStatusFilter) {
+    filtered = filtered.filter(t => t.status === dashTeacherStatusFilter);
+  }
+
+  const counts = currentDashData.teacherStatus.reduce((acc, t) => {
+    acc[t.status] = (acc[t.status] || 0) + 1;
+    return acc;
+  }, {});
+
+  const statusColors = {
+    complete: 'bg-green-100 text-green-700 border-green-200',
+    partial: 'bg-yellow-100 text-yellow-700 border-yellow-200',
+    none: 'bg-red-100 text-red-700 border-red-200'
+  };
+  const statusLabels = { complete: 'ครบแล้ว', partial: 'กำลังบันทึก', none: 'ยังไม่บันทึก' };
+
+  container.innerHTML = `
+    <div class="bg-white rounded-xl shadow mb-6 border border-blue-100">
+      <div class="p-5 border-b flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div>
+          <h3 class="font-bold text-gray-800">🧑‍🏫 สถานะการบันทึกของครู (วันนี้)</h3>
+          <p class="text-xs text-gray-500 mt-1">แสดง ${filtered.length} / ${currentDashData.teacherStatus.length} คน</p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button onclick="setDashTeacherStatusFilter('')" class="px-3 py-2 rounded-lg text-sm font-medium border ${dashTeacherStatusFilter === '' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-blue-50'}">
+            ทั้งหมด (${currentDashData.teacherStatus.length})
+          </button>
+          <button onclick="setDashTeacherStatusFilter('complete')" class="px-3 py-2 rounded-lg text-sm font-medium border ${dashTeacherStatusFilter === 'complete' ? 'bg-green-600 text-white border-green-600' : 'bg-white text-green-700 border-green-200 hover:bg-green-50'}">
+            ครบแล้ว (${counts.complete || 0})
+          </button>
+          <button onclick="setDashTeacherStatusFilter('partial')" class="px-3 py-2 rounded-lg text-sm font-medium border ${dashTeacherStatusFilter === 'partial' ? 'bg-yellow-500 text-white border-yellow-500' : 'bg-white text-yellow-700 border-yellow-200 hover:bg-yellow-50'}">
+            กำลังบันทึก (${counts.partial || 0})
+          </button>
+          <button onclick="setDashTeacherStatusFilter('none')" class="px-3 py-2 rounded-lg text-sm font-medium border ${dashTeacherStatusFilter === 'none' ? 'bg-red-600 text-white border-red-600' : 'bg-white text-red-700 border-red-200 hover:bg-red-50'}">
+            ยังไม่บันทึก (${counts.none || 0})
+          </button>
+        </div>
+      </div>
+      <div class="p-5">
+        ${filtered.length === 0 ? '<p class="text-center text-gray-500 py-6">ไม่พบครูในสถานะนี้</p>' : `
+          <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            ${filtered.map(t => `
+              <div class="p-4 bg-gray-50 rounded-xl border border-gray-200 hover:shadow-sm transition">
+                <div class="flex items-start justify-between gap-3 mb-3">
+                  <div>
+                    <p class="font-bold text-gray-800">${t.teacherName}</p>
+                    <p class="text-sm text-gray-600">${t.classRoom}</p>
+                  </div>
+                  <span class="px-3 py-1 rounded-full text-xs font-bold border ${statusColors[t.status] || statusColors.none}">
+                    ${statusLabels[t.status] || '-'}
+                  </span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <div class="flex-1 bg-gray-200 rounded-full h-2">
+                    <div class="${t.percentage === 100 ? 'bg-green-500' : t.percentage > 0 ? 'bg-yellow-500' : 'bg-red-500'} h-2 rounded-full" style="width: ${t.percentage}%"></div>
+                  </div>
+                  <span class="text-xs font-bold text-gray-700 w-10 text-right">${t.percentage}%</span>
+                </div>
+                <p class="text-xs text-gray-500 mt-2">บันทึกแล้ว ${t.loggedToday}/${t.totalStudents} คน</p>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+}
+
+function setDashTeacherStatusFilter(status) {
+  dashTeacherStatusFilter = status;
+  localStorage.setItem('hifzDashTeacherStatusFilter', status);
+  renderDashTeacherStatusUI();
+}
+
+// ============================================
+// ฟังก์ชันวาดตารางอันดับคุณครู
+// ============================================
+function renderDashTeacherRankingUI() {
+  const container = document.getElementById('dashTeacherRankingSection');
+  if (!container || !currentDashData || !currentDashData.teacherRanking) return;
+
+  const sorted = [...currentDashData.teacherRanking].sort((a, b) => {
+    if (dashTeacherRankFilter === 'week') {
+      if (b.weekLogCount !== a.weekLogCount) return b.weekLogCount - a.weekLogCount;
+      if (b.todayPercentage !== a.todayPercentage) return b.todayPercentage - a.todayPercentage;
+      return b.passCount - a.passCount;
+    }
+    if (dashTeacherRankFilter === 'pass') {
+      if (b.passCount !== a.passCount) return b.passCount - a.passCount;
+      if (b.weekLogCount !== a.weekLogCount) return b.weekLogCount - a.weekLogCount;
+      return b.todayPercentage - a.todayPercentage;
+    }
+    if (b.todayPercentage !== a.todayPercentage) return b.todayPercentage - a.todayPercentage;
+    if (b.loggedToday !== a.loggedToday) return b.loggedToday - a.loggedToday;
+    return b.weekLogCount - a.weekLogCount;
+  });
+
+  container.innerHTML = `
+    <div class="bg-white rounded-xl shadow mb-6 border border-purple-100">
+      <div class="p-5 border-b flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div>
+          <h3 class="font-bold text-gray-800">🏅 ตารางอันดับของคุณครู</h3>
+          <p class="text-xs text-gray-500 mt-1">จัดอันดับจากความครบถ้วนวันนี้ จำนวนบันทึก 7 วัน และจำนวนรายการผ่าน</p>
+        </div>
+        <select id="dashTeacherRankFilter" class="px-3 py-2 border border-purple-200 rounded-lg text-sm focus:outline-none focus:border-purple-500 bg-white">
+          <option value="today" ${dashTeacherRankFilter === 'today' ? 'selected' : ''}>เรียงตามความครบถ้วนวันนี้</option>
+          <option value="week" ${dashTeacherRankFilter === 'week' ? 'selected' : ''}>เรียงตามบันทึก 7 วัน</option>
+          <option value="pass" ${dashTeacherRankFilter === 'pass' ? 'selected' : ''}>เรียงตามจำนวนผ่านทั้งหมด</option>
+        </select>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left">
+          <thead class="bg-purple-50 text-purple-800 text-sm">
+            <tr>
+              <th class="p-3 text-center font-bold">อันดับ</th>
+              <th class="p-3 font-bold">ครู</th>
+              <th class="p-3 text-center font-bold">ห้อง</th>
+              <th class="p-3 text-center font-bold">วันนี้</th>
+              <th class="p-3 text-center font-bold">7 วันล่าสุด</th>
+              <th class="p-3 text-center font-bold">ผ่านทั้งหมด</th>
+              <th class="p-3 text-center font-bold">คะแนนเฉลี่ย</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y text-sm">
+            ${sorted.map((t, index) => {
+              const rank = index + 1;
+              const rankBadge = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : rank;
+              const pctColor = t.todayPercentage === 100 ? 'text-green-600' : t.todayPercentage > 0 ? 'text-yellow-600' : 'text-red-600';
+              return `
+                <tr class="hover:bg-purple-50 transition">
+                  <td class="p-3 text-center font-bold">${rankBadge}</td>
+                  <td class="p-3">
+                    <p class="font-bold text-gray-800">${t.teacherName}</p>
+                    <p class="text-xs text-gray-500">${t.teacherId}</p>
+                  </td>
+                  <td class="p-3 text-center"><span class="px-2 py-1 rounded bg-gray-100 text-xs">${t.classRoom}</span></td>
+                  <td class="p-3 text-center">
+                    <p class="font-bold ${pctColor}">${t.loggedToday}/${t.totalStudents}</p>
+                    <p class="text-xs text-gray-500">${t.todayPercentage}%</p>
+                  </td>
+                  <td class="p-3 text-center font-bold text-blue-600">${t.weekLogCount}</td>
+                  <td class="p-3 text-center font-bold text-green-600">${t.passCount}</td>
+                  <td class="p-3 text-center font-bold text-purple-600">${t.avgScore}</td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  const filterEl = document.getElementById('dashTeacherRankFilter');
+  if (filterEl) {
+    filterEl.addEventListener('change', function() {
+      dashTeacherRankFilter = this.value;
+      localStorage.setItem('hifzDashTeacherRankFilter', this.value);
+      renderDashTeacherRankingUI();
+    });
+  }
 }
 
 // ============================================
