@@ -260,6 +260,7 @@ let dashStudentClassFilter = '';
 let dashStudentProgFilter = '';
 let dashTeacherStatusFilter = localStorage.getItem('hifzDashTeacherStatusFilter') || '';
 let dashTeacherRankFilter = localStorage.getItem('hifzDashTeacherRankFilter') || 'today';
+let dashActiveSection = localStorage.getItem('hifzDashActiveSection') || 'progress';
 
 const LOG_TYPES = [
   { value: 'سبق', label: 'ท่องจำ (سبق)', color: 'bg-blue-100 text-blue-700', hasScore: true },
@@ -1986,10 +1987,47 @@ async function fetchDashboardSupabase(cacheKey, silent, loader) {
   }
 }
 
+function getDashboardSections(data, role) {
+  const sections = [];
+  if ((role === 'director' || role === 'admin' || role === 'teacher') && data.classProgress && data.classProgress.length > 0) {
+    sections.push({ id: 'progress', label: '📈 ความคืบหน้า', activeClass: 'bg-green-600 text-white border-green-600 shadow-sm' });
+  }
+  if ((role === 'director' || role === 'admin' || role === 'teacher') && data.studentRanking && data.studentRanking.length > 0) {
+    sections.push({ id: 'students', label: '🏆 อันดับนักเรียน', activeClass: 'bg-yellow-500 text-white border-yellow-500 shadow-sm' });
+  }
+  if ((role === 'director' || role === 'admin') && data.teacherStatus && data.teacherStatus.length > 0) {
+    sections.push({ id: 'teacherStatus', label: '🧑‍🏫 สถานะครูวันนี้', activeClass: 'bg-blue-600 text-white border-blue-600 shadow-sm' });
+  }
+  if ((role === 'director' || role === 'admin') && data.teacherRanking && data.teacherRanking.length > 0) {
+    sections.push({ id: 'teacherRanking', label: '🏅 อันดับครู', activeClass: 'bg-purple-600 text-white border-purple-600 shadow-sm' });
+  }
+  if ((role === 'director' || role === 'admin') && data.classRanking && data.classRanking.length > 0) {
+    sections.push({ id: 'classRanking', label: '🏫 อันดับชั้น', activeClass: 'bg-indigo-600 text-white border-indigo-600 shadow-sm' });
+  }
+  if (data.logTypeStats) {
+    sections.push({ id: 'stats', label: '📊 สถิติ 7 วัน', activeClass: 'bg-pink-600 text-white border-pink-600 shadow-sm' });
+  }
+  sections.push({ id: 'recent', label: '⏱️ ล่าสุด', activeClass: 'bg-gray-800 text-white border-gray-800 shadow-sm' });
+  return sections;
+}
+
+function switchDashboardSection(sectionId) {
+  dashActiveSection = sectionId;
+  localStorage.setItem('hifzDashActiveSection', sectionId);
+  if (currentDashData) {
+    renderDashboardContent({ success: true, data: currentDashData });
+  }
+}
+
 function renderDashboardContent(response) {
   const data = response.data;
   const role = currentUser.role;
   const content = document.getElementById('mainContent');
+  currentDashData = data;
+  const dashSections = getDashboardSections(data, role);
+  if (!dashSections.some(s => s.id === dashActiveSection)) {
+    dashActiveSection = dashSections[0] ? dashSections[0].id : 'recent';
+  }
   
   let html = `
         <div class="mb-6">
@@ -2041,40 +2079,36 @@ function renderDashboardContent(response) {
 
         <div class="sticky top-0 z-20 mb-6 bg-gray-50/95 backdrop-blur border border-gray-200 rounded-xl shadow-sm p-2 overflow-x-auto">
           <div class="flex gap-2 min-w-max text-sm">
-            <a href="#dashboard-section-progress" class="px-3 py-2 rounded-lg bg-white hover:bg-green-50 text-gray-700 font-medium border border-gray-200">ความคืบหน้า</a>
-            <a href="#dashboard-section-students" class="px-3 py-2 rounded-lg bg-white hover:bg-yellow-50 text-gray-700 font-medium border border-gray-200">อันดับนักเรียน</a>
-            ${(role === 'director' || role === 'admin') ? `
-              <a href="#dashboard-section-teachers" class="px-3 py-2 rounded-lg bg-white hover:bg-blue-50 text-gray-700 font-medium border border-gray-200">สถานะครูวันนี้</a>
-              <a href="#dashboard-section-teacher-ranking" class="px-3 py-2 rounded-lg bg-white hover:bg-purple-50 text-gray-700 font-medium border border-gray-200">อันดับครู</a>
-              <a href="#dashboard-section-class-ranking" class="px-3 py-2 rounded-lg bg-white hover:bg-indigo-50 text-gray-700 font-medium border border-gray-200">อันดับชั้น</a>
-            ` : ''}
-            <a href="#dashboard-section-stats" class="px-3 py-2 rounded-lg bg-white hover:bg-pink-50 text-gray-700 font-medium border border-gray-200">สถิติ 7 วัน</a>
-            <a href="#dashboard-section-recent" class="px-3 py-2 rounded-lg bg-white hover:bg-gray-100 text-gray-700 font-medium border border-gray-200">ล่าสุด</a>
+            ${dashSections.map(section => `
+              <button type="button" onclick="switchDashboardSection('${section.id}')" class="px-3 py-2 rounded-lg font-medium border transition ${dashActiveSection === section.id ? section.activeClass : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'}">
+                ${section.label}
+              </button>
+            `).join('')}
           </div>
         </div>
       `;
 
-      if ((role === 'director' || role === 'admin' || role === 'teacher') && data.classProgress && data.classProgress.length > 0) {
-        html += `<section id="dashboard-section-progress" class="scroll-mt-24"><div id="dashClassProgressSection"></div></section>`;
+      if (dashActiveSection === 'progress' && (role === 'director' || role === 'admin' || role === 'teacher') && data.classProgress && data.classProgress.length > 0) {
+        html += `<section><div id="dashClassProgressSection"></div></section>`;
       }
       
       // 💡 เพิ่มคอนเทนเนอร์สำหรับตารางอันดับนักเรียน
-      if ((role === 'director' || role === 'admin' || role === 'teacher') && data.studentRanking && data.studentRanking.length > 0) {
-        html += `<section id="dashboard-section-students" class="scroll-mt-24"><div id="dashStudentRankingSection"></div></section>`;
+      if (dashActiveSection === 'students' && (role === 'director' || role === 'admin' || role === 'teacher') && data.studentRanking && data.studentRanking.length > 0) {
+        html += `<section><div id="dashStudentRankingSection"></div></section>`;
       }
 
-      if ((role === 'director' || role === 'admin') && data.teacherStatus && data.teacherStatus.length > 0) {
-        html += `<section id="dashboard-section-teachers" class="scroll-mt-24"><div id="dashTeacherStatusSection"></div></section>`;
+      if (dashActiveSection === 'teacherStatus' && (role === 'director' || role === 'admin') && data.teacherStatus && data.teacherStatus.length > 0) {
+        html += `<section><div id="dashTeacherStatusSection"></div></section>`;
       }
 
-      if ((role === 'director' || role === 'admin') && data.teacherRanking && data.teacherRanking.length > 0) {
-        html += `<section id="dashboard-section-teacher-ranking" class="scroll-mt-24"><div id="dashTeacherRankingSection"></div></section>`;
+      if (dashActiveSection === 'teacherRanking' && (role === 'director' || role === 'admin') && data.teacherRanking && data.teacherRanking.length > 0) {
+        html += `<section><div id="dashTeacherRankingSection"></div></section>`;
       }
       
-      if ((role === 'director' || role === 'admin') && data.classRanking && data.classRanking.length > 0) {
+      if (dashActiveSection === 'classRanking' && (role === 'director' || role === 'admin') && data.classRanking && data.classRanking.length > 0) {
         const topClasses = data.classRanking.slice(0, 10);
         html += `
-          <section id="dashboard-section-class-ranking" class="scroll-mt-24 bg-white rounded-xl shadow mb-6">
+          <section class="bg-white rounded-xl shadow mb-6">
             <div class="p-5 border-b">
               <h3 class="font-bold text-gray-800"> อันดับความก้าวหน้าของชั้น</h3>
               <p class="text-xs text-gray-500 mt-1">เรียงตามเปอร์เซ็นต์ความสำเร็จ</p>
@@ -2133,7 +2167,7 @@ function renderDashboardContent(response) {
         `;
       }
       
-      if (data.logTypeStats) {
+      if (dashActiveSection === 'stats' && data.logTypeStats) {
         const types = [
           { key: 'سبق', display: 'سَبَق', label: 'ท่องจำ', color: 'bg-blue-500', icon: '📖' },
           { key: 'سبقي', display: 'سَبْقِي', label: 'ทบทวนใหม่', color: 'bg-purple-500', icon: '🔄' },
@@ -2144,7 +2178,7 @@ function renderDashboardContent(response) {
         const maxCount = Math.max(...types.map(t => data.logTypeStats[t.key] || 0), 1);
         
         html += `
-          <section id="dashboard-section-stats" class="scroll-mt-24 bg-white rounded-xl shadow mb-6">
+          <section class="bg-white rounded-xl shadow mb-6">
             <div class="p-5 border-b">
               <h3 class="font-bold text-gray-800">📊 สถิติการบันทึก 7 วันล่าสุด</h3>
               <p class="text-xs text-gray-500 mt-1">แยกตามประเภทการท่อง</p>
@@ -2172,8 +2206,9 @@ function renderDashboardContent(response) {
         `;
       }
       
-      html += `
-        <section id="dashboard-section-recent" class="scroll-mt-24 bg-white rounded-xl shadow">
+      if (dashActiveSection === 'recent') {
+        html += `
+        <section class="bg-white rounded-xl shadow">
           <div class="p-5 border-b">
             <h3 class="font-bold text-gray-800">⏱️ บันทึกล่าสุด</h3>
           </div>
@@ -2204,6 +2239,7 @@ function renderDashboardContent(response) {
           </div>
         </section>
       `;
+      }
       
       content.innerHTML = html;
       
