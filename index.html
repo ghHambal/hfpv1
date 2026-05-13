@@ -4677,13 +4677,6 @@ function getTeacherInputValue(teacherId) {
   return getTeacherDisplayText(teacher);
 }
 
-function renderTeacherDatalistOptions() {
-  return allTeachers
-    .filter(t => t.role === 'teacher')
-    .map(t => `<option value="${getTeacherDisplayText(t)}">`)
-    .join('');
-}
-
 function findTeacherFromInput(inputValue) {
   const raw = String(inputValue || '').trim().replace(/\s+/g, ' ');
   if (!raw) return null;
@@ -4741,6 +4734,60 @@ async function resolveTeacherInput(inputId, classRoom) {
   cacheClear('teachers');
   showToast(`เพิ่มครูใหม่: ${getTeacherDisplayText(savedTeacher)}`, 'success');
   return savedTeacher.teacherId;
+}
+
+function getFilteredTeachers(query) {
+  const q = String(query || '').trim().toLowerCase();
+  const teacherList = allTeachers.filter(t => t.role === 'teacher');
+  if (!q) return teacherList.slice(0, 8);
+
+  return teacherList.filter(t => {
+    const fullName = `${t.firstName || ''} ${t.lastName || ''}`.trim().toLowerCase();
+    const display = getTeacherDisplayText(t).toLowerCase();
+    return fullName.includes(q) ||
+      display.includes(q) ||
+      String(t.teacherId || '').toLowerCase().includes(q) ||
+      String(t.classRoom || '').toLowerCase().includes(q);
+  }).slice(0, 8);
+}
+
+function showTeacherSuggestions(inputId) {
+  const input = document.getElementById(inputId);
+  const list = document.getElementById(`${inputId}Suggestions`);
+  if (!input || !list) return;
+
+  const teachers = getFilteredTeachers(input.value);
+  if (teachers.length === 0) {
+    list.innerHTML = `
+      <div class="px-4 py-3 text-sm text-gray-500">
+        ไม่พบครูเดิม กดบันทึกเพื่อเพิ่มครูใหม่นี้
+      </div>
+    `;
+    list.classList.remove('hidden');
+    return;
+  }
+
+  list.innerHTML = teachers.map(t => `
+    <button type="button" onclick="selectTeacherSuggestion('${inputId}', '${escapeJsSingleQuote(getTeacherDisplayText(t))}')" class="w-full text-left px-4 py-3 hover:bg-green-50 border-b last:border-b-0">
+      <p class="font-medium text-gray-800">${t.firstName || ''} ${t.lastName || ''}</p>
+      <p class="text-xs text-gray-500">${t.teacherId || '-'} • ${t.classRoom || '-'}</p>
+    </button>
+  `).join('');
+  list.classList.remove('hidden');
+}
+
+function selectTeacherSuggestion(inputId, value) {
+  const input = document.getElementById(inputId);
+  const list = document.getElementById(`${inputId}Suggestions`);
+  if (input) input.value = value;
+  if (list) list.classList.add('hidden');
+}
+
+function hideTeacherSuggestionsLater(inputId) {
+  setTimeout(() => {
+    const list = document.getElementById(`${inputId}Suggestions`);
+    if (list) list.classList.add('hidden');
+  }, 180);
 }
 
 function showStudentModal(studentId) {
@@ -4811,13 +4858,17 @@ function showStudentModal(studentId) {
           
           <div>
             <label class="block text-sm font-medium mb-1">ครูที่ปรึกษา</label>
-            <input type="text" id="studentTeacher" list="studentTeacherList"
+            <div class="relative">
+              <input type="text" id="studentTeacher"
               value="${isEdit ? getTeacherInputValue(student.teacherId) : ''}"
               placeholder="เลือกครู หรือพิมพ์ชื่อครูใหม่"
+              onfocus="showTeacherSuggestions('studentTeacher')"
+              oninput="showTeacherSuggestions('studentTeacher')"
+              onblur="hideTeacherSuggestionsLater('studentTeacher')"
+              autocomplete="off"
               class="w-full px-4 py-2 border-2 rounded-lg focus:outline-none focus:border-green-600">
-            <datalist id="studentTeacherList">
-              ${renderTeacherDatalistOptions()}
-            </datalist>
+              <div id="studentTeacherSuggestions" class="hidden absolute z-[70] left-0 right-0 mt-1 bg-white border-2 border-green-200 rounded-xl shadow-xl max-h-64 overflow-y-auto"></div>
+            </div>
             <p class="text-xs text-gray-500 mt-1">หากพิมพ์ชื่อใหม่ ระบบจะเพิ่มเข้าเมนูครูให้อัตโนมัติ</p>
           </div>
           
@@ -7680,13 +7731,17 @@ function showAdminStudentModal(studentId) {
           </div>
           <div>
             <label class="block text-sm font-medium mb-1">ครูที่ปรึกษา</label>
-            <input type="text" id="as_teacher" list="asTeacherList"
+            <div class="relative">
+              <input type="text" id="as_teacher"
               value="${isEdit ? getTeacherInputValue(student.teacherId) : ''}"
               placeholder="เลือกครู หรือพิมพ์ชื่อครูใหม่"
+              onfocus="showTeacherSuggestions('as_teacher')"
+              oninput="showTeacherSuggestions('as_teacher')"
+              onblur="hideTeacherSuggestionsLater('as_teacher')"
+              autocomplete="off"
               class="w-full px-4 py-2 border-2 rounded-lg">
-            <datalist id="asTeacherList">
-              ${renderTeacherDatalistOptions()}
-            </datalist>
+              <div id="as_teacherSuggestions" class="hidden absolute z-[70] left-0 right-0 mt-1 bg-white border-2 border-green-200 rounded-xl shadow-xl max-h-64 overflow-y-auto"></div>
+            </div>
             <p class="text-xs text-gray-500 mt-1">หากพิมพ์ชื่อใหม่ ระบบจะเพิ่มเข้าเมนูครูให้อัตโนมัติ</p>
           </div>
           <div>
