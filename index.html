@@ -6001,7 +6001,10 @@ function buildDailyLogPage(r, schoolName) {
         <tr>
           <td class="center-text" style="border: 1px solid #000;">${i + 1}</td>
           <td class="center-text" style="border: 1px solid #000;">${formatDateThai(log.date)}</td>
-          <td style="border: 1px solid #000; text-align: left; padding-left: 8px;">${log.surahName || ''}</td>
+          <td style="border: 1px solid #000; text-align: left; padding-left: 8px; padding-top: 2px; padding-bottom: 2px; line-height: 1.2;">
+            <div>${log.surahName || ''}</div>
+            ${log.ayah && log.ayah !== '-' ? `<div style="font-size: 10px; color: #555; font-weight: normal; margin-top: 1px;">อายะฮ์: ${log.ayah}</div>` : ''}
+          </td>
           <td class="center-text" style="border: 1px solid #000;">${log.logType === 'سبق' ? '✓' : ''}</td>
           <td class="center-text" style="border: 1px solid #000;">${log.logType === 'سبقي' ? '✓' : ''}</td>
           <td class="center-text" style="border: 1px solid #000;">${log.logType === 'منزل' ? '✓' : ''}</td>
