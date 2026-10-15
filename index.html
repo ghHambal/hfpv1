@@ -124,6 +124,96 @@ async function testSupabaseConnection() {
 testSupabaseConnection();
 
 // ============================================
+// 🚀 Helpers: ดึงข้อมูลครบทุกแถว (แก้ปัญหาลิมิต 1,000 แถวของ Supabase ด้วย Concurrent Pagination)
+// ============================================
+async function fetchAllSupabaseRows(tableName, selectColumns = '*', queryModifier = null, onProgress = null) {
+  const pageSize = 1000;
+  
+  // 1. ดึงหน้าแรกและนับจำนวนทั้งหมดพร้อมกัน
+  let initialQuery = supabaseClient
+    .from(tableName)
+    .select(selectColumns, { count: 'exact' });
+
+  if (typeof queryModifier === 'function') {
+    initialQuery = queryModifier(initialQuery);
+  }
+
+  initialQuery = initialQuery.range(0, pageSize - 1);
+
+  const { data: firstPage, count, error: firstErr } = await initialQuery;
+  if (firstErr) {
+    console.error(`fetchAllSupabaseRows error on table ${tableName}:`, firstErr);
+    throw firstErr;
+  }
+
+  const total = count !== null ? count : (firstPage ? firstPage.length : 0);
+  if (!firstPage || firstPage.length === 0) return [];
+  if (total <= pageSize || firstPage.length < pageSize) {
+    if (typeof onProgress === 'function') onProgress(firstPage.length, total);
+    return firstPage;
+  }
+
+  // 2. ถ้ามีข้อมูลเกิน 1,000 แถว ให้ดึงหน้าที่เหลือแบบขนาน (Concurrent Chunks)
+  const allRows = [...firstPage];
+  if (typeof onProgress === 'function') onProgress(allRows.length, total);
+
+  const totalPages = Math.ceil(total / pageSize);
+  const remainingPageIndices = [];
+  for (let p = 1; p < totalPages; p++) {
+    remainingPageIndices.push(p);
+  }
+
+  const concurrency = 4; // โหลดพร้อมกันทีละ 4 หน้าเพื่อความรวดเร็วและไม่หน่วง
+  for (let i = 0; i < remainingPageIndices.length; i += concurrency) {
+    const chunk = remainingPageIndices.slice(i, i + concurrency);
+    const promises = chunk.map(async (pageIdx) => {
+      const from = pageIdx * pageSize;
+      const to = from + pageSize - 1;
+      let q = supabaseClient.from(tableName).select(selectColumns);
+      if (typeof queryModifier === 'function') {
+        q = queryModifier(q);
+      }
+      q = q.range(from, to);
+      const { data, error } = await q;
+      if (error) throw error;
+      return { pageIdx, data: data || [] };
+    });
+
+    const results = await Promise.all(promises);
+    results.sort((a, b) => a.pageIdx - b.pageIdx);
+    for (const res of results) {
+      allRows.push(...res.data);
+    }
+    if (typeof onProgress === 'function') {
+      onProgress(allRows.length, total);
+    }
+  }
+
+  return allRows;
+}
+
+// 🚀 Helper: นำเข้า/อัปเดตข้อมูลแบบแบ่งชุด (Batch Upsert เพื่อป้องกัน Payload Limit / Timeout)
+async function batchUpsertSupabaseRows(tableName, rows, conflictKey, batchSize = 250, onProgress = null) {
+  if (!rows || rows.length === 0) return { success: true, count: 0 };
+  let processed = 0;
+  const total = rows.length;
+
+  for (let i = 0; i < total; i += batchSize) {
+    const chunk = rows.slice(i, i + batchSize);
+    const { error } = await supabaseClient.from(tableName).upsert(chunk, { onConflict: conflictKey });
+    if (error) {
+      console.error(`Batch upsert error in ${tableName} (index ${i}-${i + chunk.length}):`, error);
+      throw error;
+    }
+    processed += chunk.length;
+    if (typeof onProgress === 'function') {
+      onProgress(processed, total);
+    }
+  }
+  return { success: true, count: processed };
+}
+
+// ============================================
 // 🌐 Global State
 // ============================================
 // ============================================
@@ -1761,41 +1851,40 @@ async function renderDashboard() {
 // ============================================
 async function fetchDashboardSupabase(cacheKey, silent, loader) {
   try {
-    let stdQuery = supabaseClient.from('Students').select('*').eq('isActive', true);
-    if (currentUser.role === 'teacher') {
-      stdQuery = stdQuery.eq('teacherId', currentUser.userId);
-    } else if (currentUser.role === 'parent') {
-      stdQuery = stdQuery.eq('parentId', currentUser.userId);
-    }
+    const stdModifier = (q) => {
+      let base = q.eq('isActive', true);
+      if (currentUser.role === 'teacher') return base.eq('teacherId', currentUser.userId);
+      if (currentUser.role === 'parent') return base.eq('parentId', currentUser.userId);
+      return base;
+    };
 
-    const [stdReq, tchReq, progReq, surahReq] = await Promise.all([
-      stdQuery,
+    const [students, tchReq, progReq, surahReq] = await Promise.all([
+      fetchAllSupabaseRows('Students', '*', stdModifier),
       supabaseClient.from('Teachers').select('*').eq('isActive', true),
       supabaseClient.from('Programs').select('*').eq('isActive', true),
       supabaseClient.from('Surahs').select('*')
     ]);
 
-    if (stdReq.error) throw stdReq.error;
-    const students = stdReq.data || [];
+    if (tchReq.error) throw tchReq.error;
+    if (progReq.error) throw progReq.error;
+    if (surahReq.error) throw surahReq.error;
 
-    let logQuery = supabaseClient.from('Logs').select('*').order('date', { ascending: false });
-    if (currentUser.role === 'teacher') {
-      logQuery = logQuery.eq('teacherId', currentUser.userId);
-    } else if (currentUser.role === 'parent') {
-      const sIds = students.map(s => s.studentId);
-      if (sIds.length > 0) {
-        logQuery = logQuery.in('studentId', sIds);
-      } else {
-        logQuery = logQuery.eq('studentId', 'NONE');
+    const logModifier = (q) => {
+      let base = q.order('date', { ascending: false });
+      if (currentUser.role === 'teacher') {
+        return base.eq('teacherId', currentUser.userId);
+      } else if (currentUser.role === 'parent') {
+        const sIds = students.map(s => s.studentId);
+        if (sIds.length > 0) return base.in('studentId', sIds);
+        return base.eq('studentId', 'NONE');
       }
-    }
+      return base;
+    };
 
-    const logReq = await logQuery;
-    if (logReq.error) throw logReq.error;
+    const logs = await fetchAllSupabaseRows('Logs', '*', logModifier);
 
     const teachers = tchReq.data || [];
     const programs = progReq.data || [];
-    const logs = logReq.data || [];
     const surahs = surahReq.data || [];
 
     allStudents = students; allTeachers = teachers;
@@ -5092,18 +5181,15 @@ async function refreshReportsData(cacheKey, silent) {
   }
 
   try {
-    // 1. สร้าง Query ดึงนักเรียนตามสิทธิ์การเข้าถึง (Role)
-    let stdQuery = supabaseClient.from('Students').select('*').eq('isActive', true);
-    
-    // ถ้าเป็นครู ดึงเฉพาะห้องตัวเอง / ถ้าเป็นผู้ปกครอง ดึงเฉพาะลูกตัวเอง
-    if (currentUser.role === 'teacher') {
-        stdQuery = stdQuery.eq('teacherId', currentUser.userId);
-    } else if (currentUser.role === 'parent') {
-        stdQuery = stdQuery.eq('parentId', currentUser.userId);
-    }
+    // 1. ดึงนักเรียนตามสิทธิ์การเข้าถึง (Role) แบบไม่ติดลิมิต 1,000 คน
+    const stdModifier = (q) => {
+      let base = q.eq('isActive', true);
+      if (currentUser.role === 'teacher') return base.eq('teacherId', currentUser.userId);
+      if (currentUser.role === 'parent') return base.eq('parentId', currentUser.userId);
+      return base;
+    };
 
-    const { data: students, error: err1 } = await stdQuery;
-    if (err1) throw err1;
+    const students = await fetchAllSupabaseRows('Students', '*', stdModifier);
 
     // ถ้าไม่มีข้อมูลนักเรียน (เช่น ผู้ปกครองเพิ่งลงทะเบียนใหม่)
     if (!students || students.length === 0) {
@@ -5115,25 +5201,25 @@ async function refreshReportsData(cacheKey, silent) {
 
     const studentIds = students.map(s => s.studentId);
 
-    // 2. ดึง Logs, Programs, และ Surahs พร้อมกัน ⚡
-    let logQuery = supabaseClient.from('Logs').select('*');
-    if (currentUser.role === 'teacher') {
-         logQuery = logQuery.eq('teacherId', currentUser.userId);
-    } else if (currentUser.role === 'parent') {
-         logQuery = logQuery.in('studentId', studentIds);
-    }
+    // 2. ดึง Logs (แบบข้ามลิมิต 1,000 แถว), Programs, และ Surahs พร้อมกัน ⚡
+    const logModifier = (q) => {
+      if (currentUser.role === 'teacher') {
+        return q.eq('teacherId', currentUser.userId);
+      } else if (currentUser.role === 'parent') {
+        return q.in('studentId', studentIds);
+      }
+      return q;
+    };
 
-    const [logRes, progRes, surahRes] = await Promise.all([
-        logQuery,
+    const [logs, progRes, surahRes] = await Promise.all([
+        fetchAllSupabaseRows('Logs', '*', logModifier),
         supabaseClient.from('Programs').select('*').eq('isActive', true),
         supabaseClient.from('Surahs').select('*')
     ]);
 
-    if (logRes.error) throw logRes.error;
     if (progRes.error) throw progRes.error;
     if (surahRes.error) throw surahRes.error;
 
-    const logs = logRes.data || [];
     const programs = progRes.data || [];
     const surahs = surahRes.data || [];
 
@@ -7547,14 +7633,13 @@ async function renderAdminStudents() {
   const content = document.getElementById('adminContent');
   content.innerHTML = '<div class="text-center py-8">กำลังโหลด...</div>';
   try {
-    const [stdRes, tRes, pRes, pgRes] = await Promise.all([
-      supabaseClient.from('Students').select('*').order('classRoom').order('studentId'),
+    const [allStds, tRes, pRes, pgRes] = await Promise.all([
+      fetchAllSupabaseRows('Students', '*', q => q.order('classRoom').order('studentId')),
       supabaseClient.from('Teachers').select('teacherId, firstName, lastName, classRoom'),
       supabaseClient.from('Parents').select('parentId, firstName, lastName'),
       supabaseClient.from('Programs').select('programId, programName'),
     ]);
-    if (stdRes.error) throw stdRes.error;
-    allStudents = stdRes.data || [];
+    allStudents = allStds || [];
     if (tRes.data) allTeachers = tRes.data;
     if (pRes.data) allParents = pRes.data;
     if (pgRes.data) allPrograms = pgRes.data;
@@ -8941,38 +9026,45 @@ function renderAdminSystem() {
       </div>
     </div>
     
-    <div class="bg-red-50 rounded-xl shadow-sm border-2 border-red-200 mt-8 overflow-hidden">
-      <div class="bg-red-100 border-b border-red-200 px-5 py-3">
-        <h3 class="font-bold text-red-800 flex items-center gap-2">🚨 โซนอันตราย: ศูนย์จัดการข้อมูลและเริ่มเทอมใหม่</h3>
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 mt-8 overflow-hidden">
+      <div class="bg-purple-50 border-b border-purple-100 px-5 py-3.5 flex items-center justify-between">
+        <h3 class="font-bold text-purple-900 flex items-center gap-2">
+          <span>🗄️</span> ศูนย์จัดการภาคเรียนและการสำรองข้อมูล (Data & Term Management)
+        </h3>
+        <span class="text-xs font-semibold bg-purple-100 text-purple-800 px-3 py-1 rounded-full">แอดมินเท่านั้น</span>
       </div>
       <div class="p-5">
-        <p class="text-sm text-red-700 mb-6 font-medium">ส่วนนี้ใช้สำหรับจัดการข้อมูลเมื่อสิ้นสุดปีการศึกษา โปรดใช้ด้วยความระมัดระวัง!</p>
+        <p class="text-sm text-gray-600 mb-5">สำรองข้อมูลครบทุกตาราง กู้คืนข้อมูลผ่านไฟล์ JSON หรือเริ่มต้นภาคเรียนใหม่โดยที่ประวัติการท่องจำไม่สูญหาย</p>
         
         <input type="file" id="backupFileInput" accept=".json" class="hidden" onchange="handleBackupFileSelect(this)">
 
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <button onclick="backupAllData()" class="flex flex-col items-center justify-center p-4 bg-white border-2 border-blue-200 rounded-xl hover:bg-blue-50 transition group">
+          <!-- 1. Backup Data -->
+          <button onclick="backupAllData()" class="flex flex-col items-center justify-center p-5 bg-blue-50 border-2 border-blue-200 rounded-xl hover:bg-blue-100 transition shadow-sm group">
             <span class="text-3xl mb-2 group-hover:scale-110 transition">💾</span>
-            <span class="font-bold text-blue-700">1. Backup Data</span>
-            <span class="text-xs text-gray-500 mt-1 text-center">ดาวน์โหลดข้อมูล<br>เป็นไฟล์ JSON</span>
+            <span class="font-bold text-blue-800 text-base">1. Backup Data</span>
+            <span class="text-xs text-blue-600 mt-1.5 text-center">ดาวน์โหลดข้อมูลครบทุกตาราง<br>(ทะลุลิมิต 1,000 แถว)</span>
           </button>
 
-          <button onclick="showDangerModal('clear')" class="flex flex-col items-center justify-center p-4 bg-white border-2 border-orange-200 rounded-xl hover:bg-orange-50 transition group">
-            <span class="text-3xl mb-2 group-hover:scale-110 transition">🧹</span>
-            <span class="font-bold text-orange-700">2. Clear Logs</span>
-            <span class="text-xs text-gray-500 mt-1 text-center">ลบประวัติการท่อง<br>(เฉพาะตาราง Logs)</span>
-          </button>
-
-          <button onclick="showDangerModal('newterm')" class="flex flex-col items-center justify-center p-4 bg-red-600 rounded-xl hover:bg-red-700 transition shadow-lg group">
+          <!-- 2. Start New Term -->
+          <button onclick="showDangerModal('newterm')" class="flex flex-col items-center justify-center p-5 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 transition shadow-md group">
             <span class="text-3xl mb-2 group-hover:scale-110 transition">🚀</span>
-            <span class="font-bold text-white">3. Start New Term</span>
-            <span class="text-xs text-red-100 mt-1 text-center">อัปเดตเทอมใหม่<br>และล้างสถิติเดิม</span>
+            <span class="font-bold text-white text-base">2. Start New Term</span>
+            <span class="text-xs text-emerald-100 mt-1.5 text-center font-medium">ขึ้นภาคเรียนใหม่<br>ประวัติเดิมอยู่ครบ บันทึกต่อได้ทันที</span>
           </button>
 
-          <button onclick="document.getElementById('backupFileInput').click()" class="flex flex-col items-center justify-center p-4 bg-white border-2 border-teal-200 rounded-xl hover:bg-teal-50 transition group">
+          <!-- 3. Restore Data -->
+          <button onclick="document.getElementById('backupFileInput').click()" class="flex flex-col items-center justify-center p-5 bg-teal-50 border-2 border-teal-200 rounded-xl hover:bg-teal-100 transition shadow-sm group">
             <span class="text-3xl mb-2 group-hover:scale-110 transition">📥</span>
-            <span class="font-bold text-teal-700">4. Restore Data</span>
-            <span class="text-xs text-gray-500 mt-1 text-center">อัปโหลด JSON<br>เพื่อกู้คืนข้อมูล</span>
+            <span class="font-bold text-teal-800 text-base">3. Restore Data</span>
+            <span class="text-xs text-teal-600 mt-1.5 text-center">อัปโหลดไฟล์ JSON<br>กู้คืนข้อมูลแบบ Batch ปลอดภัย</span>
+          </button>
+
+          <!-- 4. Clear Logs -->
+          <button onclick="showDangerModal('clear')" class="flex flex-col items-center justify-center p-5 bg-rose-50 border-2 border-rose-200 rounded-xl hover:bg-rose-100 transition shadow-sm group">
+            <span class="text-3xl mb-2 group-hover:scale-110 transition">🧹</span>
+            <span class="font-bold text-rose-700 text-base">4. Clear Logs</span>
+            <span class="text-xs text-rose-500 mt-1.5 text-center">ล้างประวัติการท่อง<br>(เฉพาะกรณีต้องการรีเซ็ต)</span>
           </button>
         </div>
       </div>
@@ -9415,42 +9507,102 @@ function silentRefreshCurrentTab() {
 // 💾 ระบบจัดการข้อมูลและเริ่มต้นเทอมใหม่ (Admin Only)
 // ============================================
 
-// 1. ฟังก์ชันสำรองข้อมูล (Download as JSON)
+// 1. ฟังก์ชันสำรองข้อมูลทั้งหมด (Full Backup JSON ทะลุลิมิต 1,000 แถว)
 async function backupAllData() {
-    showLoading('กำลังเตรียมไฟล์สำรองข้อมูล...');
+    showLoading('กำลังเตรียมไฟล์สำรองข้อมูล (กำลังตรวจสอบรายการ)...');
     try {
-        const { data: students } = await supabaseClient.from('Students').select('*');
-        const { data: logs } = await supabaseClient.from('Logs').select('*');
-        const { data: teachers } = await supabaseClient.from('Teachers').select('*');
-        
-        const backupData = {
-            exportDate: new Date().toISOString(),
-            schoolName: appSettings.schoolName,
-            currentTerm: appSettings.currentTerm,
-            data: { students, logs, teachers }
+        const updateStatus = (tableName, current, total = null) => {
+            const text = total 
+                ? `กำลังสำรองข้อมูล: ${tableName} (${current.toLocaleString()} / ${total.toLocaleString()} รายการ)...`
+                : `กำลังสำรองข้อมูล: ${tableName} (${current.toLocaleString()} รายการ)...`;
+            const loadingTextEl = document.getElementById('loadingText');
+            if (loadingTextEl) loadingTextEl.innerText = text;
         };
 
-        const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+        // 1. ดึงข้อมูลตารางหลักที่ไม่ใหญ่มาก
+        updateStatus('Students (นักเรียน)', 0);
+        const students = await fetchAllSupabaseRows('Students', '*', null, (cur, tot) => updateStatus('Students', cur, tot));
+
+        updateStatus('Teachers (ครู)', 0);
+        const teachers = await fetchAllSupabaseRows('Teachers', '*', null, (cur, tot) => updateStatus('Teachers', cur, tot));
+
+        updateStatus('Parents (ผู้ปกครอง)', 0);
+        const parents = await fetchAllSupabaseRows('Parents', '*', null, (cur, tot) => updateStatus('Parents', cur, tot));
+
+        updateStatus('Programs (หลักสูตร)', 0);
+        const programs = await fetchAllSupabaseRows('Programs', '*', null, (cur, tot) => updateStatus('Programs', cur, tot));
+
+        updateStatus('Settings (การตั้งค่า)', 0);
+        const settings = await fetchAllSupabaseRows('Settings', '*', null, (cur, tot) => updateStatus('Settings', cur, tot));
+
+        updateStatus('Surahs (ซูเราะฮ์)', 0);
+        const surahs = await fetchAllSupabaseRows('Surahs', '*', null, (cur, tot) => updateStatus('Surahs', cur, tot));
+
+        updateStatus('Mapping (การจับคู่หน้า)', 0);
+        const mapping = await fetchAllSupabaseRows('Mapping', '*', null, (cur, tot) => updateStatus('Mapping', cur, tot));
+
+        // 2. ดึงตาราง Logs ที่มีขนาดใหญ่แบบทะลุ 1,000 แถว (Concurrent Pagination)
+        updateStatus('Logs (ประวัติการท่อง)', 0);
+        const logs = await fetchAllSupabaseRows('Logs', '*', null, (cur, tot) => updateStatus('Logs', cur, tot));
+
+        const now = new Date();
+        const dateStr = now.toISOString().slice(0, 10);
+        const timeStr = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+        const currentTermSafe = (appSettings.currentTerm || 'term').replace(/[\\/\\\\]/g, '-');
+
+        const backupData = {
+            system: 'Hifz Tracker Pro',
+            version: '2.0',
+            exportDate: now.toISOString(),
+            schoolName: appSettings.schoolName || '',
+            currentTerm: appSettings.currentTerm || '',
+            counts: {
+                students: students.length,
+                teachers: teachers.length,
+                parents: parents.length,
+                programs: programs.length,
+                settings: settings.length,
+                logs: logs.length,
+                surahs: surahs.length,
+                mapping: mapping.length
+            },
+            data: {
+                students,
+                teachers,
+                parents,
+                programs,
+                settings,
+                logs,
+                surahs,
+                mapping
+            }
+        };
+
+        const jsonString = JSON.stringify(backupData, null, 2);
+        const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `Backup_HifzTrack_${appSettings.currentTerm.replace('/','_')}_${new Date().toLocaleDateString()}.json`;
+        a.download = `Backup_HifzPro_Term_${currentTermSafe}_${dateStr}_${timeStr}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+
         hideLoading();
-        showToast('📦 สำรองข้อมูลสำเร็จ! โปรดเก็บไฟล์นี้ไว้ในที่ปลอดภัย', 'success');
+        showToast(`📦 สำรองข้อมูลสำเร็จครบทั้งระบบ! รวม ${logs.length.toLocaleString()} ประวัติการท่อง`, 'success');
+        return backupData;
     } catch (error) {
         hideLoading();
-        showToast('เกิดข้อผิดพลาดในการสำรองข้อมูล', 'error');
+        console.error('Backup error:', error);
+        showToast('เกิดข้อผิดพลาดในการสำรองข้อมูล: ' + error.message, 'error');
+        throw error;
     }
 }
 
 
 // ============================================
-// 🚨 โซนอันตราย: ระบบ Modal ป๊อปอัป และการ Execute + Restore
+// 🚨 โซนศูนย์จัดการข้อมูล: ระบบ Modal ป๊อปอัป และการ Execute
 // ============================================
 let tempBackupData = null; // ตัวแปรเก็บข้อมูลชั่วคราวก่อนกด Restore
 
@@ -9462,14 +9614,36 @@ function handleBackupFileSelect(input) {
     const reader = new FileReader();
     reader.onload = function(e) {
         try {
-            const data = JSON.parse(e.target.result);
-            if (!data || !data.data || !data.data.students) {
+            const parsed = JSON.parse(e.target.result);
+            if (!parsed) throw new Error('ไฟล์ว่างเปล่า');
+
+            // รองรับทั้งแบบ v2.0 ({ data: { students, logs... } }) และ v1.0
+            const dataObj = parsed.data || parsed;
+            if (!dataObj.students && !dataObj.logs && !dataObj.teachers) {
                 throw new Error('โครงสร้างไฟล์ไม่ถูกต้อง หรือไม่ใช่ไฟล์ Backup ของระบบนี้');
             }
-            tempBackupData = data.data; // เก็บ { students, teachers, logs } ไว้ในความจำ
+
+            tempBackupData = {
+                metadata: {
+                    exportDate: parsed.exportDate ? new Date(parsed.exportDate).toLocaleString('th-TH') : 'ไม่ระบุ',
+                    schoolName: parsed.schoolName || '',
+                    currentTerm: parsed.currentTerm || '',
+                    version: parsed.version || '1.0'
+                },
+                students: dataObj.students || [],
+                teachers: dataObj.teachers || [],
+                parents: dataObj.parents || [],
+                programs: dataObj.programs || [],
+                settings: dataObj.settings || [],
+                logs: dataObj.logs || [],
+                surahs: dataObj.surahs || [],
+                mapping: dataObj.mapping || []
+            };
+
             input.value = ''; // เคลียร์ช่อง input
             showDangerModal('restore'); // เรียก Modal ขึ้นมาให้ยืนยัน
         } catch (error) {
+            console.error('Parse backup file error:', error);
             showToast('ไฟล์ไม่รองรับ: ' + error.message, 'error');
             input.value = '';
         }
@@ -9477,55 +9651,161 @@ function handleBackupFileSelect(input) {
     reader.readAsText(file);
 }
 
-// 2. สร้างป๊อปอัปกลางหน้าจอ
+// 2. สร้างป๊อปอัป Modal
 function showDangerModal(type) {
-    let title, desc, confirmWord, actionFn;
+    let title, headerContent, bodyContent, confirmWord, actionFn;
     let icon = '⚠️';
     let bgColor = 'bg-red-600';
     let textColor = 'text-red-600';
     
     if (type === 'clear') {
-        title = '🗑️ ยืนยันการล้างประวัติการท่อง';
-        desc = 'คุณกำลังจะลบประวัติการท่องรายวันทั้งหมดในระบบ ข้อมูลนี้ไม่สามารถกู้คืนได้<br><br>พิมพ์คำว่า <strong class="text-red-600">DELETE</strong> เพื่อยืนยัน';
+        title = '🗑️ ยืนยันการล้างประวัติการท่องจำ (Logs)';
+        headerContent = `
+            <div class="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-3 shadow-lg"><span class="text-4xl">🧹</span></div>
+            <h3 class="text-xl font-bold text-white">${title}</h3>
+        `;
+        bodyContent = `
+            <div class="bg-red-50 border border-red-200 rounded-xl p-4 text-left text-sm mb-4">
+                <div class="font-bold text-red-800 flex items-center gap-1.5 mb-1">
+                    <span>⚠️ คำเตือนสำคัญ:</span>
+                </div>
+                <p class="text-xs text-red-700 leading-relaxed">
+                    คุณกำลังจะลบประวัติการท่องจำรายวันทั้งหมดในระบบ (เฉพาะตาราง Logs) ข้อมูลนี้ไม่สามารถกู้คืนได้ และยอดสะสมยุซจะถูกรีเซ็ต โปรดสำรองข้อมูลก่อนทำรายการเสมอ
+                </p>
+            </div>
+            <p class="text-sm text-gray-700 mb-4">พิมพ์คำว่า <strong class="text-red-600 font-bold">DELETE</strong> เพื่อยืนยัน</p>
+        `;
         confirmWord = 'DELETE';
-        actionFn = 'executeClearLogs'; // ⚡ แก้ตรงนี้: เอาวงเล็บ () ออก
+        actionFn = executeClearLogs;
+
     } else if (type === 'newterm') {
-        title = '🚀 ยืนยันการเริ่มเทอมใหม่';
-        desc = 'ระบบจะทำการล้างประวัติการท่องเดิม และเริ่มนับสถิติใหม่<br>โปรดตรวจสอบให้แน่ใจว่าคุณได้ Backup ข้อมูลแล้ว<br><br>พิมพ์ <strong class="text-red-600">NEWTERM</strong> เพื่อยืนยัน';
+        icon = '🚀';
+        bgColor = 'bg-emerald-600';
+        textColor = 'text-emerald-600';
+        title = 'เริ่มต้นภาคเรียนใหม่';
+
+        // คำนวณเทอมถัดไปอัตโนมัติ
+        let suggestedNext = '';
+        const termMatch = (appSettings.currentTerm || '').match(/^(\d+)\/(\d+)$/);
+        if (termMatch) {
+            const termNum = parseInt(termMatch[1], 10);
+            const yearNum = parseInt(termMatch[2], 10);
+            const termsPerYear = parseInt(appSettings.termsPerYear || '2', 10);
+            if (termNum < termsPerYear) {
+                suggestedNext = `${termNum + 1}/${yearNum}`;
+            } else {
+                suggestedNext = `1/${yearNum + 1}`;
+            }
+        } else {
+            suggestedNext = appSettings.currentTerm || '2/2569';
+        }
+
+        headerContent = `
+            <div class="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-3 shadow-lg"><span class="text-4xl">${icon}</span></div>
+            <h3 class="text-2xl font-bold text-white">${title}</h3>
+            <p class="text-xs text-emerald-100 mt-1">ปรับปรุงภาคเรียนโดยคงประวัติการท่องจำเดิมไว้ 100%</p>
+        `;
+
+        bodyContent = `
+            <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-left text-sm mb-4">
+                <div class="font-bold text-emerald-800 flex items-center gap-1.5 mb-1">
+                    <span>🛡️ ประวัติเดิมปลอดภัย 100% (ไม่มีการลบข้อมูล):</span>
+                </div>
+                <p class="text-xs text-emerald-700 leading-relaxed">
+                    ระบบจะบันทึกภาคเรียนใหม่ขึ้นคลาวด์ <strong>โดยไม่ลบประวัติ Logs เดิม</strong> คุณครูสามารถเข้าบันทึกการท่องจำต่อได้ทันที และสถิติการท่องจำสะสมของนักเรียนยังอยู่ครบถ้วน
+                </p>
+            </div>
+
+            <div class="mb-4 text-left">
+                <label class="block text-sm font-bold text-gray-700 mb-1">ระบุภาคเรียน/ปีการศึกษาใหม่</label>
+                <input type="text" id="newTermInput" value="${suggestedNext}" placeholder="เช่น 2/2569" class="w-full text-center px-4 py-2.5 border-2 border-emerald-300 rounded-xl focus:border-emerald-600 font-bold text-lg bg-white">
+                <p class="text-xs text-gray-500 mt-1">ภาคเรียนปัจจุบัน: <strong>${appSettings.currentTerm || '1/2569'}</strong></p>
+            </div>
+
+            <div class="mb-5 text-left bg-gray-50 border rounded-xl p-3">
+                <label class="flex items-center text-sm font-medium text-gray-700 cursor-pointer">
+                    <input type="checkbox" id="chkAutoBackupNewTerm" checked class="w-4 h-4 text-emerald-600 rounded mr-2 focus:ring-emerald-500">
+                    <span>💾 ดาวน์โหลดไฟล์ Backup ทั้งหมดก่อนเริ่มเทอมใหม่ (แนะนำ)</span>
+                </label>
+            </div>
+
+            <p class="text-sm text-gray-700 mb-2">พิมพ์คำว่า <strong class="text-emerald-700 font-bold">NEWTERM</strong> เพื่อยืนยัน</p>
+        `;
         confirmWord = 'NEWTERM';
-        actionFn = 'executeStartNewTerm'; // ⚡ แก้ตรงนี้: เอาวงเล็บ () ออก
+        actionFn = executeStartNewTerm;
+
     } else if (type === 'restore') {
         icon = '📥';
         bgColor = 'bg-teal-600';
         textColor = 'text-teal-600';
         title = 'นำเข้าข้อมูลจากไฟล์ (Restore)';
-        desc = `ตรวจพบข้อมูล: นักเรียน <strong>${tempBackupData.students?.length || 0}</strong> คน, ครู <strong>${tempBackupData.teachers?.length || 0}</strong> คน, บันทึก <strong>${tempBackupData.logs?.length || 0}</strong> รายการ<br><br>ข้อมูลในระบบที่มีรหัสซ้ำกันจะถูก "เขียนทับ" ทันที!<br>พิมพ์ <strong class="${textColor}">RESTORE</strong> เพื่อยืนยัน`;
+
+        headerContent = `
+            <div class="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-3 shadow-lg"><span class="text-4xl">${icon}</span></div>
+            <h3 class="text-2xl font-bold text-white">${title}</h3>
+            <p class="text-xs text-teal-100 mt-1">วันที่สำรอง: ${tempBackupData?.metadata?.exportDate || '-'} • เทอม: ${tempBackupData?.metadata?.currentTerm || '-'}</p>
+        `;
+
+        bodyContent = `
+            <div class="bg-gray-50 rounded-xl p-3 border mb-4 text-left text-xs space-y-1.5">
+                <p class="font-bold text-gray-700 mb-1">📌 เลือกตารางที่ต้องการกู้คืน:</p>
+                <label class="flex items-center justify-between py-1 border-b">
+                    <span class="flex items-center"><input type="checkbox" id="chk_res_std" checked class="mr-2"> 👨‍🎓 นักเรียน (Students)</span>
+                    <strong class="text-gray-800">${(tempBackupData?.students?.length || 0).toLocaleString()} คน</strong>
+                </label>
+                <label class="flex items-center justify-between py-1 border-b">
+                    <span class="flex items-center"><input type="checkbox" id="chk_res_tch" checked class="mr-2"> 👨‍🏫 ครู (Teachers)</span>
+                    <strong class="text-gray-800">${(tempBackupData?.teachers?.length || 0).toLocaleString()} คน</strong>
+                </label>
+                <label class="flex items-center justify-between py-1 border-b">
+                    <span class="flex items-center"><input type="checkbox" id="chk_res_prt" checked class="mr-2"> 👨‍👩‍👧 ผู้ปกครอง (Parents)</span>
+                    <strong class="text-gray-800">${(tempBackupData?.parents?.length || 0).toLocaleString()} คน</strong>
+                </label>
+                <label class="flex items-center justify-between py-1 border-b">
+                    <span class="flex items-center"><input type="checkbox" id="chk_res_prg" checked class="mr-2"> 📚 โปรแกรม (Programs)</span>
+                    <strong class="text-gray-800">${(tempBackupData?.programs?.length || 0).toLocaleString()} รายการ</strong>
+                </label>
+                <label class="flex items-center justify-between py-1 border-b">
+                    <span class="flex items-center"><input type="checkbox" id="chk_res_logs" checked class="mr-2"> 📖 ประวัติการท่อง (Logs)</span>
+                    <strong class="text-teal-700">${(tempBackupData?.logs?.length || 0).toLocaleString()} รายการ</strong>
+                </label>
+                <label class="flex items-center justify-between py-1">
+                    <span class="flex items-center"><input type="checkbox" id="chk_res_set" class="mr-2"> ⚙️ การตั้งค่าโรงเรียน (Settings)</span>
+                    <strong class="text-gray-500">${(tempBackupData?.settings?.length || 0).toLocaleString()} ค่า</strong>
+                </label>
+            </div>
+            <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-3 text-left">
+                ⚠️ ข้อมูลที่มีรหัสซ้ำกันจะถูก "อัปเดต/เขียนทับ" ด้วยข้อมูลจากไฟล์สำรอง
+            </p>
+            <p class="text-sm text-gray-700 mb-2">พิมพ์คำว่า <strong class="${textColor} font-bold">RESTORE</strong> เพื่อยืนยัน</p>
+        `;
         confirmWord = 'RESTORE';
-        actionFn = 'executeRestoreBackup'; // ⚡ แก้ตรงนี้: เอาวงเล็บ () ออก
+        actionFn = executeRestoreBackup;
     }
 
     document.getElementById('modalContainer').innerHTML = `
         <div class="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center p-4 fade-in" onclick="if(event.target===this) closeModal()">
             <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all scale-100">
-                <div class="${bgColor} p-6 text-center">
-                    <div class="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-3 shadow-lg"><span class="text-4xl">${icon}</span></div>
-                    <h3 class="text-2xl font-bold text-white">${title}</h3>
+                <div class="${bgColor} p-5 text-center">
+                    ${headerContent}
                 </div>
                 <div class="p-6 text-center">
-                    <p class="text-gray-700 mb-5">${desc}</p>
+                    ${bodyContent}
                     
-                    ${type === 'newterm' ? `<div class="mb-4 text-left"><label class="block text-sm font-bold text-gray-700 mb-1">ระบุเทอม/ปีการศึกษาใหม่</label><input type="text" id="newTermInput" value="${appSettings.currentTerm}" class="w-full text-center px-4 py-3 border-2 border-gray-300 rounded-xl focus:border-blue-600 font-bold text-lg bg-gray-50"></div>` : ''}
-                    
-                    <input type="text" id="dangerConfirmInput" placeholder="พิมพ์ ${confirmWord} ที่นี่" class="w-full text-center px-4 py-3 border-2 border-red-200 rounded-xl focus:border-red-600 font-bold text-xl mb-6 ${textColor} uppercase tracking-widest placeholder-red-200 transition">
+                    <input type="text" id="dangerConfirmInput" placeholder="พิมพ์ ${confirmWord} ที่นี่" class="w-full text-center px-4 py-3 border-2 border-gray-300 rounded-xl focus:border-blue-600 font-bold text-xl mb-6 ${textColor} uppercase tracking-widest placeholder-gray-300 transition">
                     
                     <div class="flex gap-3">
                         <button onclick="closeModal()" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 py-3 rounded-xl font-bold transition">ยกเลิก</button>
-                        <button onclick="validateDangerAction('${confirmWord}', ${actionFn})" class="flex-1 ${bgColor} hover:opacity-90 text-white py-3 rounded-xl font-bold shadow-md transition">ยืนยันทำรายการ</button>
+                        <button id="btnDangerSubmit" class="flex-1 ${bgColor} hover:opacity-90 text-white py-3 rounded-xl font-bold shadow-md transition">ยืนยันทำรายการ</button>
                     </div>
                 </div>
             </div>
         </div>
     `;
+
+    document.getElementById('btnDangerSubmit').onclick = function() {
+        validateDangerAction(confirmWord, actionFn);
+    };
 }
 
 // 3. ตรวจสอบการพิมพ์คำยืนยัน
@@ -9533,22 +9813,23 @@ function validateDangerAction(expectedWord, actionFn) {
     const input = document.getElementById('dangerConfirmInput').value.trim().toUpperCase();
     if (input !== expectedWord) {
         showToast('คำยืนยันไม่ถูกต้อง โปรดพิมพ์ให้ตรงกัน', 'error');
-        document.getElementById('dangerConfirmInput').classList.add('border-red-500', 'bg-red-50');
-        setTimeout(() => document.getElementById('dangerConfirmInput').classList.remove('border-red-500', 'bg-red-50'), 1000);
+        const el = document.getElementById('dangerConfirmInput');
+        el.classList.add('border-red-500', 'bg-red-50');
+        setTimeout(() => el.classList.remove('border-red-500', 'bg-red-50'), 1000);
         return;
     }
-    actionFn(); // ถ้าพิมพ์ถูก ให้เรียกฟังก์ชันลบ/นำเข้า จริง
+    actionFn(); // ถ้าพิมพ์ถูก ให้เรียกฟังก์ชันจริง
 }
 
-// 4. ฟังก์ชันลบข้อมูลจริง
+// 4. ฟังก์ชันล้างข้อมูลประวัติ Logs จริง
 async function executeClearLogs() {
-    showLoading('กำลังล้างข้อมูลการบันทึก...');
+    closeModal();
+    showLoading('กำลังล้างข้อมูลประวัติการท่องจำ...');
     try {
-        const { error } = await supabaseClient.from('Logs').delete().neq('studentId', '0');
+        const { error } = await supabaseClient.from('Logs').delete().neq('logId', 'NEVER_MATCH');
         if (error) throw error;
         hideLoading();
         cacheClearAll();
-        closeModal();
         showToast('🧹 ล้างข้อมูลประวัติการท่องเรียบร้อยแล้ว', 'success');
         renderAdminSystem(); 
     } catch (error) {
@@ -9557,69 +9838,152 @@ async function executeClearLogs() {
     }
 }
 
-// 5. ฟังก์ชันเริ่มเทอมใหม่จริง (แก้ไข Error loadSettings)
+// 5. ฟังก์ชันเริ่มเทอมใหม่จริง (🛡️ ไม่ลบ Logs ประวัติเดิมอยู่ครบ 100%)
 async function executeStartNewTerm() {
-    const nextTerm = document.getElementById('newTermInput').value.trim();
+    const nextTerm = document.getElementById('newTermInput')?.value.trim();
     if (!nextTerm) {
         showToast('โปรดระบุเทอมใหม่', 'warning');
         return;
     }
 
-    showLoading('กำลังเตรียมการเริ่มเทอมใหม่...');
+    const shouldAutoBackup = document.getElementById('chkAutoBackupNewTerm')?.checked ?? true;
+    closeModal();
+
+    // 1. ถ้าเลือก Auto-Backup ให้ทำการสำรองข้อมูลก่อน
+    if (shouldAutoBackup) {
+        try {
+            showToast('กำลังดาวน์โหลดไฟล์สำรองข้อมูลก่อนเริ่มเทอมใหม่...', 'info');
+            await backupAllData();
+        } catch (backupErr) {
+            if (!confirm('การสำรองข้อมูลล้มเหลว ต้องการดำเนินการเปลี่ยนเทอมต่อไปหรือไม่?')) {
+                return;
+            }
+        }
+    }
+
+    showLoading(`กำลังปรับปรุงสู่ภาคเรียน ${nextTerm}...`);
     try {
-        // 1. อัปเดตขึ้นฐานข้อมูล
-        const { error: settingsError } = await supabaseClient.from('Settings').upsert([{ key: 'currentTerm', value: nextTerm }], { onConflict: 'key' });
+        // 2. อัปเดต currentTerm ขึ้นตาราง Settings บน Supabase
+        const { error: settingsError } = await supabaseClient
+            .from('Settings')
+            .upsert([{ key: 'currentTerm', value: nextTerm }], { onConflict: 'key' });
+            
         if (settingsError) throw settingsError;
 
-        // 2. ลบประวัติเก่า
-        const { error: logsError } = await supabaseClient.from('Logs').delete().neq('studentId', '0');
-        if (logsError) throw logsError;
+        // 3. 🛡️ ประวัติเดิม Logs ไม่ถูกลบ คงสภาพ 100% เพื่อให้คุณครูบันทึกต่อได้ทันที
+        appSettings.currentTerm = nextTerm;
 
-        // ⚡ 3. แก้ไขตรงนี้: อัปเดตตัวแปรในเครื่องแทนการเรียกฟังก์ชันที่ไม่มีอยู่จริง
-        appSettings.currentTerm = nextTerm; 
+        // 4. ล้างแคชเพื่อให้ระบบดึงข้อมูลเทอมใหม่ทันที
+        cacheClearAll();
 
         hideLoading();
-        cacheClearAll();
-        closeModal();
-        showToast(`🚀 เริ่มต้นปีการศึกษา ${nextTerm} เรียบร้อยแล้ว!`, 'success');
+        showToast(`🚀 เริ่มต้นภาคเรียนที่ ${nextTerm} สำเร็จ! คุณครูสามารถบันทึกต่อได้ทันที`, 'success');
         
-        // รีเฟรชหน้าจอทั้งหมดให้เป็นเทอมใหม่
+        // 5. รีเฟรชหน้าจอทั้งหมดให้เป็นเทอมใหม่
         renderMainApp();
     } catch (error) {
         hideLoading();
-        showToast('เกิดข้อผิดพลาด: ' + error.message, 'error');
+        console.error('Start new term error:', error);
+        showToast('เกิดข้อผิดพลาดในการขึ้นเทอมใหม่: ' + error.message, 'error');
     }
 }
 
-// 6. ฟังก์ชัน นำเข้าข้อมูล (Restore) จริง!!
+// 6. ฟังก์ชัน นำเข้าข้อมูล (Restore) จริงแบบ Batch ปลอดภัย
 async function executeRestoreBackup() {
     if (!tempBackupData) return;
-    showLoading('กำลังนำเข้าข้อมูล (อาจใช้เวลาสักครู่)...');
+
+    const optStudents = document.getElementById('chk_res_std')?.checked ?? true;
+    const optTeachers = document.getElementById('chk_res_tch')?.checked ?? true;
+    const optParents = document.getElementById('chk_res_prt')?.checked ?? true;
+    const optPrograms = document.getElementById('chk_res_prg')?.checked ?? true;
+    const optLogs = document.getElementById('chk_res_logs')?.checked ?? true;
+    const optSettings = document.getElementById('chk_res_set')?.checked ?? false;
+    const optMapping = tempBackupData.mapping && tempBackupData.mapping.length > 0;
+    const optSurahs = tempBackupData.surahs && tempBackupData.surahs.length > 0;
+
+    closeModal();
+    showLoading('กำลังเริ่มต้นนำเข้าข้อมูล...');
+
+    const updateRestoreStatus = (text) => {
+        const loadingTextEl = document.getElementById('loadingText');
+        if (loadingTextEl) loadingTextEl.innerText = text;
+    };
+
     try {
-        // อัปเดตตาราง Teachers
-        if (tempBackupData.teachers && tempBackupData.teachers.length > 0) {
-            const { error } = await supabaseClient.from('Teachers').upsert(tempBackupData.teachers, { onConflict: 'teacherId' });
-            if (error) throw error;
+        // 1. Teachers
+        if (optTeachers && tempBackupData.teachers && tempBackupData.teachers.length > 0) {
+            updateRestoreStatus(`กำลังนำเข้า ครู (${tempBackupData.teachers.length} รายการ)...`);
+            await batchUpsertSupabaseRows('Teachers', tempBackupData.teachers, 'teacherId', 100);
         }
-        // อัปเดตตาราง Students
-        if (tempBackupData.students && tempBackupData.students.length > 0) {
-            const { error } = await supabaseClient.from('Students').upsert(tempBackupData.students, { onConflict: 'studentId' });
-            if (error) throw error;
+
+        // 2. Parents
+        if (optParents && tempBackupData.parents && tempBackupData.parents.length > 0) {
+            updateRestoreStatus(`กำลังนำเข้า ผู้ปกครอง (${tempBackupData.parents.length} รายการ)...`);
+            await batchUpsertSupabaseRows('Parents', tempBackupData.parents, 'parentId', 100);
         }
-        // อัปเดตตาราง Logs
-        if (tempBackupData.logs && tempBackupData.logs.length > 0) {
-            const { error } = await supabaseClient.from('Logs').upsert(tempBackupData.logs, { onConflict: 'id' });
-            if (error) throw error;
+
+        // 3. Programs
+        if (optPrograms && tempBackupData.programs && tempBackupData.programs.length > 0) {
+            updateRestoreStatus(`กำลังนำเข้า หลักสูตร (${tempBackupData.programs.length} รายการ)...`);
+            await batchUpsertSupabaseRows('Programs', tempBackupData.programs, 'programId', 50);
+        }
+
+        // 4. Students
+        if (optStudents && tempBackupData.students && tempBackupData.students.length > 0) {
+            await batchUpsertSupabaseRows(
+                'Students', 
+                tempBackupData.students, 
+                'studentId', 
+                200, 
+                (cur, tot) => updateRestoreStatus(`กำลังนำเข้า นักเรียน: ${cur.toLocaleString()} / ${tot.toLocaleString()} คน (${Math.round((cur/tot)*100)}%)...`)
+            );
+        }
+
+        // 5. Settings
+        if (optSettings && tempBackupData.settings && tempBackupData.settings.length > 0) {
+            updateRestoreStatus(`กำลังนำเข้า การตั้งค่าโรงเรียน...`);
+            await batchUpsertSupabaseRows('Settings', tempBackupData.settings, 'key', 50);
+        }
+
+        // 6. Logs (แบ่งชุดละ 250 รายการ + Sanitize logId)
+        if (optLogs && tempBackupData.logs && tempBackupData.logs.length > 0) {
+            // ตรวจสอบและทำความสะอาด Primary Key ให้เป็น logId
+            const sanitizedLogs = tempBackupData.logs.map((row, idx) => {
+                const item = { ...row };
+                if (!item.logId && item.id) item.logId = String(item.id);
+                if (!item.logId) item.logId = `LOG-${Date.now()}-${idx}`;
+                delete item.id; // ป้องกันข้อผิดพลาด column 'id' does not exist บน Supabase
+                return item;
+            });
+
+            await batchUpsertSupabaseRows(
+                'Logs', 
+                sanitizedLogs, 
+                'logId', 
+                250, 
+                (cur, tot) => updateRestoreStatus(`กำลังนำเข้า ประวัติการท่อง: ${cur.toLocaleString()} / ${tot.toLocaleString()} รายการ (${Math.round((cur/tot)*100)}%)...`)
+            );
+        }
+
+        // 7. Mapping & Surahs (ถ้ามี)
+        if (optMapping) {
+            await batchUpsertSupabaseRows('Mapping', tempBackupData.mapping, 'id', 100);
+        }
+        if (optSurahs) {
+            await batchUpsertSupabaseRows('Surahs', tempBackupData.surahs, 'number', 100);
         }
 
         hideLoading();
         tempBackupData = null; // ล้างข้อมูลจากความจำ
         cacheClearAll();
-        closeModal();
         showToast('📥 นำเข้าข้อมูลสำเร็จเรียบร้อยแล้ว!', 'success');
-        renderAdminSystem(); // รีเฟรชหน้าดูสถิติใหม่
+        
+        await refreshSettingsSupabase(true);
+        if (currentTab === 'admin') renderAdminSystem();
+        else renderMainApp();
     } catch (error) {
         hideLoading();
+        console.error('Restore error:', error);
         showToast('เกิดข้อผิดพลาดในการนำเข้า: ' + error.message, 'error');
     }
 }
