@@ -3826,9 +3826,19 @@ async function viewStudentDetail(studentId) {
       </div>
 
       <div class="bg-white rounded-xl shadow p-6 mb-6">
-        <h3 class="font-bold text-gray-800 mb-4 flex items-center gap-2"><span class="text-xl">📊</span> สรุปผลการประเมินรายเดือน (เทอม ${currentTermNum})</h3>
-        <div class="grid grid-cols-1 gap-4">
-          ${currentTermNum === 1 ? renderTermTable(1, term1MonthsThai, 5) : renderTermTable(2, term2MonthsThai, 11)}
+        <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <h3 class="font-bold text-gray-800 flex items-center gap-2"><span class="text-xl">📊</span> สรุปผลการประเมินรายเดือน (ปีการศึกษา ${currentYear})</h3>
+          <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">ภาคเรียนปัจจุบัน: ${currentTermStr}</span>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <h4 class="font-bold text-sm text-emerald-800 mb-2 flex items-center gap-1.5"><span>📗</span> ภาคเรียนที่ 1 (พ.ค. - ต.ค.)</h4>
+            ${renderTermTable(1, term1MonthsThai, 5)}
+          </div>
+          <div>
+            <h4 class="font-bold text-sm text-teal-800 mb-2 flex items-center gap-1.5"><span>📘</span> ภาคเรียนที่ 2 (พ.ย. - เม.ย.)</h4>
+            ${renderTermTable(2, term2MonthsThai, 11)}
+          </div>
         </div>
       </div>
     `;
