@@ -15,31 +15,33 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Prompt:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
   <style>
-    * { font-family: 'Sarabun', sans-serif; }
+    * { font-family: 'Prompt', 'Sarabun', -apple-system, BlinkMacSystemFont, sans-serif; }
     :root {
       --primary-color: #2E7D32;
       --secondary-color: #FFA726;
+      --safe-bottom: env(safe-area-inset-bottom, 10px);
     }
     .primary-text { color: var(--primary-color); }
     .primary-bg { background-color: var(--primary-color); }
     .primary-border { border-color: var(--primary-color); }
-    .primary-hover:hover { background-color: #1B5E20; }
+    .primary-hover:hover { filter: brightness(0.9); }
     .secondary-bg { background-color: var(--secondary-color); }
     
     /* Hide scrollbar for clean UI */
-    ::-webkit-scrollbar { width: 8px; height: 8px; }
-    ::-webkit-scrollbar-track { background: #f1f1f1; }
-    ::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
-    ::-webkit-scrollbar-thumb:hover { background: #555; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #f8fafc; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
     
-    .fade-in { animation: fadeIn 0.3s ease-in; }
-    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    .fade-in { animation: fadeIn 0.25s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
     
-    .juz-cell { transition: all 0.2s; cursor: pointer; }
+    .juz-cell { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; }
     .juz-cell:hover { transform: scale(1.05); }
 
     #progressMessage {
@@ -59,9 +61,35 @@
     }
     .marquee-content {
       display: inline-block;
-      animation: scroll-left-to-right 25s linear infinite;
+      animation: scroll-left-to-right 28s linear infinite;
     }
 
+    /* 📱 Mobile Bottom Dock & App-Like Enhancements */
+    .pb-safe {
+      padding-bottom: max(10px, env(safe-area-inset-bottom, 10px));
+    }
+    .mobile-tab-btn {
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      transition: transform 0.15s ease, color 0.15s ease;
+    }
+    .mobile-tab-btn:active {
+      transform: scale(0.92);
+    }
+    .mobile-tab-dot {
+      transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.2s ease;
+    }
+    @keyframes slideUpModal {
+      from { transform: translateY(100%); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    .animate-slide-up {
+      animation: slideUpModal 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    .backdrop-blur-xs {
+      backdrop-filter: blur(2px);
+      -webkit-backdrop-filter: blur(2px);
+    }
   </style>
 </head>
 <body class="bg-gray-50">
@@ -1667,7 +1695,7 @@ function startParentEnrollment(studentId) {
 
 
 // ============================================
-// 🏠 Main App Layout
+// 🏠 Main App Layout (รองรับทั้ง Desktop และ Mobile Bottom App Dock)
 // ============================================
 function renderMainApp() {
   const role = currentUser.role;
@@ -1693,7 +1721,6 @@ function renderMainApp() {
   }
   
   if (role === 'parent') {
-    // ⚡ เปลี่ยนเมนูผู้ปกครองให้วิ่งไปหน้าบันทึกการท่อง (Logs)
     menuItems.push({ id: 'logs', icon: '📝', label: 'บันทึกการท่อง' });
   }
   
@@ -1702,42 +1729,50 @@ function renderMainApp() {
   if (role === 'admin') {
     menuItems.push({ id: 'admin', icon: '⚙️', label: 'จัดการระบบ' });
   }
+
+  // สร้างปุ่ม Mobile Bottom Dock
+  const mobileNavHtml = buildMobileBottomNav(menuItems, role);
   
   document.getElementById('app').innerHTML = `
-    <div class="min-h-screen flex flex-col">
-      <!-- Header -->
-      <header class="primary-bg text-white shadow-lg sticky top-0 z-40">
-        <div class="container mx-auto px-4 py-3">
+    <div class="min-h-screen flex flex-col bg-[#f8fafc]">
+      <!-- Header (สไตล์โมเดิร์น พรีเมียม พร้อมกระจกเงา) -->
+      <header class="primary-bg text-white shadow-md sticky top-0 z-40 transition-colors">
+        <div class="container mx-auto px-3.5 sm:px-4 py-2.5 sm:py-3">
           <div class="flex items-center justify-between">
-            <div class="flex items-center gap-3">
-              ${logoUrl ? `<img src="${logoUrl}" class="w-10 h-10 rounded-full object-cover">` : `
-                <div class="w-10 h-10 rounded-full bg-white bg-opacity-20 flex items-center justify-center">
+            <div class="flex items-center gap-2.5 sm:gap-3">
+              ${logoUrl ? `<img src="${logoUrl}" class="w-9 h-9 sm:w-10 sm:h-10 rounded-xl object-cover border-2 border-white/30 shadow-sm">` : `
+                <div class="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center shadow-sm">
                   <span class="text-xl">🕌</span>
                 </div>
               `}
-              <div>
-                <h1 class="text-lg md:text-xl font-bold">${appName}</h1>
-                <p class="text-xs opacity-90">${schoolName} • เทอม ${appSettings.currentTerm || '1/2569'}</p>
+              <div class="leading-tight">
+                <h1 class="text-base sm:text-lg md:text-xl font-bold tracking-tight">${appName}</h1>
+                <div class="flex items-center gap-1.5 mt-0.5">
+                  <span class="text-[11px] sm:text-xs opacity-90 truncate max-w-[130px] sm:max-w-none">${schoolName}</span>
+                  <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-white/20 text-white border border-white/20">
+                    เทอม ${appSettings.currentTerm || '1/2569'}
+                  </span>
+                </div>
               </div>
             </div>
             
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-1.5 sm:gap-2">
               <!-- Profile Button -->
-              <button onclick="showProfileModal()" class="flex items-center gap-2 bg-white bg-opacity-20 hover:bg-opacity-30 px-3 py-1.5 rounded-lg transition" title="โปรไฟล์">
-                ${getProfileAvatar(currentUser, 32)}
+              <button onclick="showProfileModal()" class="flex items-center gap-2 bg-white/15 hover:bg-white/25 active:scale-95 px-2.5 sm:px-3 py-1.5 rounded-xl transition duration-150 border border-white/15 shadow-sm" title="โปรไฟล์">
+                ${getProfileAvatar(currentUser, 28)}
                 <div class="hidden md:block text-left">
-                  <p class="text-xs font-medium">${currentUser.name}</p>
-                  <p class="text-[10px] opacity-80">${roleLabels[role] || role}</p>
+                  <p class="text-xs font-semibold leading-none">${currentUser.name}</p>
+                  <p class="text-[10px] opacity-80 mt-0.5">${roleLabels[role] || role}</p>
                 </div>
               </button>
-              <button onclick="forceRefresh()" title="รีเฟรช"
-                class="bg-white bg-opacity-20 hover:bg-opacity-30 px-3 py-2 rounded-lg text-sm">
-                <svg class="w-5 h-5 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <button onclick="forceRefresh()" title="รีเฟรชข้อมูล"
+                class="bg-white/15 hover:bg-white/25 active:scale-95 p-2 rounded-xl text-sm transition duration-150 border border-white/15 shadow-sm" aria-label="รีเฟรช">
+                <svg class="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                 </svg>
               </button>
-              <button onclick="logout()" class="bg-white bg-opacity-20 hover:bg-opacity-30 px-3 py-2 rounded-lg text-sm">
-                <svg class="w-5 h-5 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <button onclick="logout()" title="ออกจากระบบ" class="bg-white/15 hover:bg-red-500/80 active:scale-95 p-2 rounded-xl text-sm transition duration-150 border border-white/15 shadow-sm" aria-label="ออกจากระบบ">
+                <svg class="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
                 </svg>
               </button>
@@ -1746,73 +1781,153 @@ function renderMainApp() {
         </div>
       </header>
       
-<!-- 🕌 Hadith Bar -->
-      <div class="bg-gradient-to-r from-amber-50 via-white to-amber-50 border-b border-amber-100 py-2 marquee-container">
-              <div class="marquee-content">
-                <p dir="rtl" style="font-family: 'Scheherazade New', 'Traditional Arabic', serif; font-size: 20px; color: #1a1a1a; line-height: 1.5; padding: 0 20px;">
-                  ${appSettings.hadithArabic || 'خَيْرُكُمْ مَنْ تَعَلَّمَ الْقُرْآنَ وَعَلَّمَهُ'} 
-                  ${appSettings.hadithThai ? `<span style="font-family: 'Sarabun', sans-serif; font-size: 14px; color: #666; margin-right: 15px;"> — ${appSettings.hadithThai}</span>` : ''}
-                </p>
-              </div>
-            </div>
+      <!-- 🕌 Hadith Bar (แถบฮะดีษสไตล์ทองคำโมเดิร์น) -->
+      <div class="bg-gradient-to-r from-amber-500/10 via-amber-400/20 to-amber-500/10 border-b border-amber-200/50 py-1.5 marquee-container">
+        <div class="marquee-content">
+          <p dir="rtl" style="font-family: 'Scheherazade New', 'Traditional Arabic', serif; font-size: 19px; color: #1a1a1a; line-height: 1.5; padding: 0 20px;">
+            ${appSettings.hadithArabic || 'خَيْرُكُمْ مَنْ تَعَلَّمَ الْقُرْآنَ وَعَلَّمَهُ'} 
+            ${appSettings.hadithThai ? `<span style="font-family: 'Prompt', 'Sarabun', sans-serif; font-size: 13px; color: #4B5563; margin-right: 15px;"> — ${appSettings.hadithThai}</span>` : ''}
+          </p>
+        </div>
+      </div>
       
-      <!-- Navigation -->
-      <nav class="bg-white shadow-md sticky top-[64px] z-30">
-        <div class="container mx-auto">
-          <div class="flex overflow-x-auto">
+      <!-- 💻 Desktop Navigation Bar (แสดงเฉพาะจอคอม/แท็บเล็ต md:block) -->
+      <nav class="hidden md:block bg-white/95 backdrop-blur-md shadow-sm border-b border-gray-200/80 sticky top-[57px] sm:top-[64px] z-30">
+        <div class="container mx-auto px-4">
+          <div class="flex items-center gap-1.5 py-1.5 overflow-x-auto">
             ${menuItems.map(item => `
               <button onclick="switchTab('${item.id}')" id="tab-${item.id}" 
-                class="nav-tab px-4 py-3 text-sm font-medium whitespace-nowrap hover:bg-gray-100 border-b-2 border-transparent">
-                <span class="mr-1">${item.icon}</span>${item.label}
+                class="nav-tab px-4 py-2 text-sm font-medium whitespace-nowrap rounded-xl transition duration-150 flex items-center gap-1.5 border border-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-100/80">
+                <span class="text-base">${item.icon}</span><span>${item.label}</span>
               </button>
             `).join('')}
 
             ${(role === 'admin' || role === 'director' || role === 'teacher') ? `
             <button onclick="showStatsExportModal()" 
-              class="px-4 py-3 text-sm font-medium whitespace-nowrap hover:bg-green-50 text-green-700 transition flex items-center gap-1 border-b-2 border-transparent">
-              <span>📥</span> ดาวน์โหลดสถิติ
+              class="ml-auto px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap hover:bg-emerald-50 text-emerald-800 rounded-xl transition flex items-center gap-1.5 border border-emerald-200 bg-emerald-50/50 shadow-xs">
+              <span>📥</span><span>ดาวน์โหลดสถิติ</span>
             </button>
           ` : ''}
           </div>
         </div>
       </nav>
       
-      <!-- Content -->
-      <main id="mainContent" class="flex-1 container mx-auto px-4 py-6">
+      <!-- Content Area (เว้นระยะด้านล่าง pb-28 บนมือถือเพื่อไม่ให้ Bottom Dock ทับเนื้อหา) -->
+      <main id="mainContent" class="flex-1 container mx-auto px-3 sm:px-4 py-4 md:py-6 pb-28 md:pb-10">
         <!-- Dynamic content -->
       </main>
       
-      <!-- Footer -->
-      <footer class="bg-gray-800 text-white py-4 mt-8">
+      <!-- 📱 Mobile Bottom App Dock Navigation (แสดงเฉพาะจอมือถือ ติดขอบล่างเหมือนแอปแท้) -->
+      <nav id="mobileBottomNav" class="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-xl border-t border-gray-200/80 shadow-[0_-8px_25px_rgba(0,0,0,0.06)] pb-safe">
+        <div class="flex items-center justify-around px-2 pt-1.5">
+          ${mobileNavHtml}
+        </div>
+      </nav>
+
+      <!-- Footer (Desktop Only) -->
+      <footer class="hidden md:block bg-gray-900 text-white py-4 mt-8 border-t border-gray-800">
         <div class="container mx-auto px-4 text-center text-sm">
           <p>© 2024 ${schoolName} | Powered by ${appName}</p>
-          <p class="text-xs opacity-75 mt-1">Developer: KruHambaleeWaji (0643230483)</p>
+          <p class="text-xs text-gray-400 mt-1">Developer: KruHambaleeWaji (0643230483)</p>
         </div>
       </footer>
     </div>
   `;
   
   switchTab('dashboard');
-  startAutoRefresh(); // 👈 เพิ่มบรรทัดนี้เข้าไปครับ เพื่อเริ่มนับเวลา
+  startAutoRefresh();
 }
 
+// 📱 ฟังก์ชันประกอบ Bottom Navigation Bar สำหรับมือถือ
+function buildMobileBottomNav(items, currentRole) {
+  if (currentRole === 'teacher') {
+    return `
+      <button onclick="switchTab('dashboard')" id="mobile-tab-dashboard" class="mobile-tab-btn flex-1 flex flex-col items-center justify-center py-1.5 px-0.5 relative text-gray-400 active:scale-95 transition-all">
+        <span class="text-xl leading-none">📊</span>
+        <span class="text-[10px] sm:text-[11px] font-medium mt-1 leading-none">แดชบอร์ด</span>
+        <span class="mobile-tab-dot w-1.5 h-1.5 rounded-full primary-bg mt-1 scale-0 transition-transform duration-200"></span>
+      </button>
+
+      <button onclick="switchTab('students')" id="mobile-tab-students" class="mobile-tab-btn flex-1 flex flex-col items-center justify-center py-1.5 px-0.5 relative text-gray-400 active:scale-95 transition-all">
+        <span class="text-xl leading-none">👦</span>
+        <span class="text-[10px] sm:text-[11px] font-medium mt-1 leading-none">นักเรียน</span>
+        <span class="mobile-tab-dot w-1.5 h-1.5 rounded-full primary-bg mt-1 scale-0 transition-transform duration-200"></span>
+      </button>
+
+      <!-- Center FAB Button for Quick Log -->
+      <button onclick="openQuickLogPicker()" class="relative -top-3.5 flex flex-col items-center group focus:outline-none px-1" title="บันทึกท่องจำเร็ว">
+        <div class="w-13 h-13 sm:w-14 sm:h-14 rounded-full primary-bg text-white shadow-lg shadow-emerald-700/35 flex items-center justify-center text-2xl active:scale-90 transition-transform duration-150 border-[3.5px] border-white">
+          <span class="transform transition group-hover:rotate-12 group-active:scale-95">✏️</span>
+        </div>
+        <span class="text-[10px] font-bold primary-text mt-0.5 tracking-tight">บันทึกเร็ว</span>
+      </button>
+
+      <button onclick="switchTab('logs')" id="mobile-tab-logs" class="mobile-tab-btn flex-1 flex flex-col items-center justify-center py-1.5 px-0.5 relative text-gray-400 active:scale-95 transition-all">
+        <span class="text-xl leading-none">📝</span>
+        <span class="text-[10px] sm:text-[11px] font-medium mt-1 leading-none">ประวัติ</span>
+        <span class="mobile-tab-dot w-1.5 h-1.5 rounded-full primary-bg mt-1 scale-0 transition-transform duration-200"></span>
+      </button>
+
+      <button onclick="switchTab('reports')" id="mobile-tab-reports" class="mobile-tab-btn flex-1 flex flex-col items-center justify-center py-1.5 px-0.5 relative text-gray-400 active:scale-95 transition-all">
+        <span class="text-xl leading-none">📈</span>
+        <span class="text-[10px] sm:text-[11px] font-medium mt-1 leading-none">รายงาน</span>
+        <span class="mobile-tab-dot w-1.5 h-1.5 rounded-full primary-bg mt-1 scale-0 transition-transform duration-200"></span>
+      </button>
+    `;
+  }
+
+  // สำหรับ Admin, Director, Parent
+  return items.map(item => `
+    <button onclick="switchTab('${item.id}')" id="mobile-tab-${item.id}" class="mobile-tab-btn flex-1 flex flex-col items-center justify-center py-1.5 px-0.5 relative text-gray-400 active:scale-95 transition-all">
+      <span class="text-xl leading-none">${item.icon}</span>
+      <span class="text-[10px] sm:text-[11px] font-medium mt-1 leading-none truncate max-w-[64px]">${item.label}</span>
+      <span class="mobile-tab-dot w-1.5 h-1.5 rounded-full primary-bg mt-1 scale-0 transition-transform duration-200"></span>
+    </button>
+  `).join('');
+}
+
+// 🔄 ฟังก์ชันสลับแท็บ (ซิงค์สถานะ Active ทั้ง Desktop Navbar และ Mobile Bottom Dock)
 function switchTab(tabId) {
   currentTab = tabId;
   
-  // อัปเดต Active Tab
+  // 1. อัปเดต Desktop Tab Active
   document.querySelectorAll('.nav-tab').forEach(el => {
-    el.classList.remove('border-b-2');
-    el.style.borderBottomColor = '';
+    el.classList.remove('bg-emerald-50', 'text-emerald-800', 'font-bold', 'border-emerald-200');
+    el.classList.add('text-gray-600', 'border-transparent');
+    el.style.backgroundColor = '';
     el.style.color = '';
   });
   
   const activeTab = document.getElementById('tab-' + tabId);
   if (activeTab) {
-    activeTab.style.borderBottomColor = 'var(--primary-color)';
-    activeTab.style.color = 'var(--primary-color)';
+    activeTab.classList.remove('text-gray-600', 'border-transparent');
+    activeTab.classList.add('font-bold');
+    activeTab.style.backgroundColor = 'rgba(46, 125, 50, 0.08)';
+    activeTab.style.color = 'var(--primary-color, #2E7D32)';
   }
+
+  // 2. อัปเดต Mobile Bottom Dock Active
+  document.querySelectorAll('.mobile-tab-btn').forEach(el => {
+    el.classList.remove('font-bold');
+    el.classList.add('text-gray-400');
+    el.style.color = '';
+    const dot = el.querySelector('.mobile-tab-dot');
+    if (dot) dot.classList.add('scale-0');
+  });
+
+  const activeMobileTab = document.getElementById('mobile-tab-' + tabId);
+  if (activeMobileTab) {
+    activeMobileTab.classList.remove('text-gray-400');
+    activeMobileTab.classList.add('font-bold');
+    activeMobileTab.style.color = 'var(--primary-color, #2E7D32)';
+    const dot = activeMobileTab.querySelector('.mobile-tab-dot');
+    if (dot) dot.classList.remove('scale-0');
+  }
+
+  // เลื่อนกลับขึ้นบนสุดอย่างนุ่มนวล
+  window.scrollTo({ top: 0, behavior: 'smooth' });
   
-  // โหลดเนื้อหา
+  // โหลดเนื้อหาตามแท็บ
   switch(tabId) {
     case 'dashboard': renderDashboard(); break;
     case 'students': renderStudents(); break;
@@ -1821,6 +1936,138 @@ function switchTab(tabId) {
     case 'reports': renderReports(); break;
     case 'admin': renderAdminPanel(); break;
   }
+}
+
+// ⚡ ฟังก์ชัน Popup เลือกนักเรียนเพื่อบันทึกเร็ว (สำหรับ Mobile Quick Log Button)
+async function openQuickLogPicker() {
+  if (currentUser.role !== 'teacher' && currentUser.role !== 'admin') {
+    switchTab('students');
+    return;
+  }
+  
+  if (!allStudents || allStudents.length === 0) {
+    showLoading('กำลังโหลดรายชื่อนักเรียน...');
+    try {
+      const stdModifier = (q) => {
+        let base = q.eq('isActive', true);
+        if (currentUser.role === 'teacher') return base.eq('teacherId', currentUser.userId);
+        return base;
+      };
+      allStudents = await fetchAllSupabaseRows('Students', '*', stdModifier);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      hideLoading();
+    }
+  }
+
+  let myStds = allStudents || [];
+  if (currentUser.role === 'teacher') {
+    const myFiltered = myStds.filter(s => s.teacherId === currentUser.userId || s.classRoom === currentUser.classRoom);
+    if (myFiltered.length > 0) myStds = myFiltered;
+  }
+  
+  const modalContainer = document.getElementById('modalContainer');
+  if (!modalContainer) return;
+
+  modalContainer.innerHTML = `
+    <div class="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 fade-in" onclick="if(event.target===this) closeModal()">
+      <div class="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl shadow-2xl max-h-[85vh] flex flex-col overflow-hidden animate-slide-up">
+        <!-- Header -->
+        <div class="p-4 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-emerald-50 via-teal-50 to-white">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-full primary-bg text-white flex items-center justify-center text-lg shadow-sm">
+              ✏️
+            </div>
+            <div>
+              <h3 class="font-bold text-gray-900 text-base leading-tight">บันทึกการท่องจำเร็ว</h3>
+              <p class="text-xs text-gray-500 mt-0.5">เลือกนักเรียนเพื่อเปิดฟอร์มประเมิน</p>
+            </div>
+          </div>
+          <button onclick="closeModal()" class="w-8 h-8 rounded-full bg-white hover:bg-gray-100 text-gray-400 hover:text-gray-700 flex items-center justify-center shadow-xs transition">
+            ✕
+          </button>
+        </div>
+        
+        <!-- Search Box -->
+        <div class="p-3 border-b border-gray-100 bg-white sticky top-0 z-10">
+          <div class="relative">
+            <span class="absolute inset-y-0 left-0 flex items-center pl-3.5 text-gray-400">🔍</span>
+            <input type="text" id="quickLogSearchInput" placeholder="ค้นหาชื่อ, นามสกุล หรือรหัสนักเรียน..." 
+              oninput="filterQuickLogStudents(this.value)"
+              class="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-600 focus:bg-white transition">
+          </div>
+        </div>
+        
+        <!-- Student List -->
+        <div id="quickLogStudentList" class="flex-1 overflow-y-auto p-3 space-y-2">
+          ${renderQuickLogStudentItems(myStds)}
+        </div>
+        
+        <!-- Footer -->
+        <div class="p-3 border-t border-gray-100 bg-gray-50 flex items-center justify-between text-xs text-gray-500">
+          <span>แสดง <strong class="text-gray-800" id="quickLogCount">${myStds.length}</strong> คน</span>
+          <button onclick="closeModal(); switchTab('students')" class="primary-text font-bold hover:underline flex items-center gap-1">
+            ดูหน้านักเรียนเต็ม ➔
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  setTimeout(() => {
+    const inp = document.getElementById('quickLogSearchInput');
+    if (inp) inp.focus();
+  }, 150);
+}
+
+function renderQuickLogStudentItems(students) {
+  if (!students || students.length === 0) {
+    return `<div class="text-center py-8 text-gray-400 text-sm">ไม่พบข้อมูลนักเรียน</div>`;
+  }
+  return students.map(s => {
+    const initial = (s.firstName || '?').charAt(0);
+    return `
+      <div onclick="closeModal(); showLogModal('${s.studentId}')"
+        class="flex items-center justify-between p-2.5 rounded-xl hover:bg-emerald-50 active:bg-emerald-100/80 cursor-pointer transition border border-gray-100 hover:border-emerald-200 bg-white shadow-xs group">
+        <div class="flex items-center gap-3">
+          ${s.photoUrl 
+            ? `<img src="${s.photoUrl}" class="w-10 h-10 rounded-full object-cover border border-gray-200" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
+               <div class="w-10 h-10 rounded-full primary-bg text-white font-bold text-sm flex items-center justify-center shadow-xs" style="display:none;">${initial}</div>`
+            : `<div class="w-10 h-10 rounded-full primary-bg text-white font-bold text-sm flex items-center justify-center shadow-xs">${initial}</div>`
+          }
+          <div>
+            <p class="font-bold text-sm text-gray-800 group-hover:text-emerald-900 leading-tight">${s.firstName} ${s.lastName}</p>
+            <p class="text-xs text-gray-500 mt-0.5"><span class="font-mono">#${s.studentId}</span> • ห้อง ${s.classRoom || '-'}</p>
+          </div>
+        </div>
+        <button class="px-3 py-1.5 rounded-lg primary-bg text-white text-xs font-semibold shadow-xs flex items-center gap-1 group-hover:scale-105 transition-transform">
+          <span>✏️</span><span>บันทึก</span>
+        </button>
+      </div>
+    `;
+  }).join('');
+}
+
+function filterQuickLogStudents(query) {
+  const q = (query || '').toLowerCase().trim();
+  let stds = allStudents || [];
+  if (currentUser && currentUser.role === 'teacher') {
+    const myFiltered = stds.filter(s => s.teacherId === currentUser.userId || s.classRoom === currentUser.classRoom);
+    if (myFiltered.length > 0) stds = myFiltered;
+  }
+
+  const filtered = stds.filter(s => {
+    const fullname = `${s.firstName || ''} ${s.lastName || ''}`.toLowerCase();
+    const id = String(s.studentId || '').toLowerCase();
+    const room = String(s.classRoom || '').toLowerCase();
+    return fullname.includes(q) || id.includes(q) || room.includes(q);
+  });
+
+  const listEl = document.getElementById('quickLogStudentList');
+  const countEl = document.getElementById('quickLogCount');
+  if (listEl) listEl.innerHTML = renderQuickLogStudentItems(filtered);
+  if (countEl) countEl.innerText = filtered.length;
 }
 
 // ============================================
